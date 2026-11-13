@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 세단 옆모습 예시 그림(직접 그린 벡터). 특정 차의 사진이 아니다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp" android:height="96dp"
+    android:viewportWidth="240" android:viewportHeight="96">
+    <!-- 바닥 그림자 -->
+    <path android:fillColor="#33000000" android:pathData="M28,86 L212,86 A92,5 0 0,1 28,86 Z" />
+    <!-- 차체 -->
+    <path android:fillColor="#9AABBD"
+        android:pathData="M12,70 L12,60 Q13,52 28,49 L72,44 Q88,29 110,25 L150,25 Q172,27 190,43 L216,47 Q230,50 230,61 L230,70 Q230,75 224,75 L201,75 A21,21 0 0,0 159,75 L84,75 A21,21 0 0,0 42,75 L18,75 Q12,75 12,70 Z" />
+    <!-- 허리선 -->
+    <path android:strokeColor="#7D8FA3" android:strokeWidth="1.5" android:pathData="M30,56 L222,56" />
+    <!-- 창문 -->
+    <path android:fillColor="#2B3A4A" android:pathData="M82,44 Q94,32 112,29 L128,29 L128,44 Z" />
+    <path android:fillColor="#2B3A4A" android:pathData="M133,29 L150,29 Q166,31 180,44 L133,44 Z" />
+    <!-- 앞뒤 등 -->
+    <path android:fillColor="#F2F5F8" android:pathData="M13,55 L30,52 L30,55 L13,58 Z" />
+    <path android:fillColor="#D85B5B" android:pathData="M222,50 L230,52 L230,56 L222,55 Z" />
+    <!-- 바퀴 -->
+    <path android:fillColor="#1E252D" android:pathData="M63,75 m-17,0 a17,17 0 1,0 34,0 a17,17 0 1,0 -34,0" />
+    <path android:fillColor="#B9C3CD" android:pathData="M63,75 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0" />
+    <path android:fillColor="#1E252D" android:pathData="M180,75 m-17,0 a17,17 0 1,0 34,0 a17,17 0 1,0 -34,0" />
+    <path android:fillColor="#B9C3CD" android:pathData="M180,75 m-8,0 a8,8 0 1,0 16,0 a8,8 0 1,0 -16,0" />
+</vector>

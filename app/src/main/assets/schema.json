@@ -1,0 +1,40 @@
+{
+  "packageName": "com.verified.incar",
+  "appDescription": "An in-car app that uses vehicle signals to confirm that a car handed over to someone else is parked and returned as expected, guide passengers to exit safely, and check whether a vehicle setting explains an odd vehicle behavior.",
+  "version": "0.1.0",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "START_VALET_MODE",
+        "description": "Start the designated driver mode that checks whether the car is parked at home and shows the consent screen to the driver.",
+        "parameters": { "type": "object", "properties": {}, "required": [] },
+        "component": "activity"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "START_ESCORT",
+        "description": "Start the escort mode that checks door, seat and seat belt of the rear passenger and guides the passenger to exit on the sidewalk side.",
+        "parameters": { "type": "object", "properties": {}, "required": [] },
+        "component": "activity"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "CHECK_VEHICLE_ODDITY",
+        "description": "Check readable vehicle settings that may explain an odd vehicle behavior the user describes, without diagnosing faults or warning lights.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "symptom": { "type": "string", "description": "The odd behavior the user noticed, in the user's words." }
+          },
+          "required": []
+        },
+        "component": "service"
+      }
+    }
+  ]
+}

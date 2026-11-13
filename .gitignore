@@ -1,0 +1,9 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+.idea/
+*.iml
+*.apk
+# 3D 모델(.glb)은 라이선스가 달라 저장소에 올리지 않는다. NOTICE.md 참고
+app/src/demo/assets/

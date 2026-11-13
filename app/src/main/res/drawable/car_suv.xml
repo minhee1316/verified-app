@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SUV 옆모습 예시 그림(직접 그린 벡터). 특정 차의 사진이 아니다. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp" android:height="96dp"
+    android:viewportWidth="240" android:viewportHeight="96">
+    <!-- 바닥 그림자 -->
+    <path android:fillColor="#33000000" android:pathData="M26,86 L214,86 A94,5 0 0,1 26,86 Z" />
+    <!-- 루프랙 -->
+    <path android:strokeColor="#5F7185" android:strokeWidth="2.5" android:strokeLineCap="round" android:pathData="M100,13 L190,11" />
+    <!-- 차체 -->
+    <path android:fillColor="#9AABBD"
+        android:pathData="M12,72 L12,56 Q13,47 26,44 L60,40 Q76,22 96,17 L196,15 Q206,15 211,23 L222,42 Q229,46 229,57 L229,71 Q229,76 223,76 L205,76 A22,22 0 0,0 161,76 L85,76 A22,22 0 0,0 41,76 L18,76 Q12,76 12,72 Z" />
+    <!-- 허리선 -->
+    <path android:strokeColor="#7D8FA3" android:strokeWidth="1.5" android:pathData="M28,54 L222,54" />
+    <!-- 창문 -->
+    <path android:fillColor="#2B3A4A" android:pathData="M70,40 Q82,26 98,22 L124,21 L124,40 Z" />
+    <path android:fillColor="#2B3A4A" android:pathData="M129,21 L166,20 L166,40 L129,40 Z" />
+    <path android:fillColor="#2B3A4A" android:pathData="M171,20 L195,20 Q201,20 204,26 L211,40 L171,40 Z" />
+    <!-- 앞뒤 등 -->
+    <path android:fillColor="#F2F5F8" android:pathData="M12,50 L34,47 L34,50 L12,53 Z" />
+    <path android:fillColor="#D85B5B" android:pathData="M221,44 L229,47 L229,52 L221,51 Z" />
+    <!-- 바퀴 -->
+    <path android:fillColor="#1E252D" android:pathData="M63,76 m-18,0 a18,18 0 1,0 36,0 a18,18 0 1,0 -36,0" />
+    <path android:fillColor="#B9C3CD" android:pathData="M63,76 m-8.5,0 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0" />
+    <path android:fillColor="#1E252D" android:pathData="M183,76 m-18,0 a18,18 0 1,0 36,0 a18,18 0 1,0 -36,0" />
+    <path android:fillColor="#B9C3CD" android:pathData="M183,76 m-8.5,0 a8.5,8.5 0 1,0 17,0 a8.5,8.5 0 1,0 -17,0" />
+</vector>

@@ -1,0 +1,98 @@
+{
+  "checkedOn": "2026-11-11",
+  "publisher": "Hyundai Motor Company / Hyundai Motor Group / Hyundai Motor Europe",
+  "description": "Official model photographs and manufacturer vehicle image. No AI generation or added vehicle features.",
+  "processing": "JPEGs reduced proportionally to at most 1600px wide, quality 88; PNG copied unchanged. No cropping or visual alteration.",
+  "displayNotice": "현대자동차 공식 사진 · 연식·색상·트림은 실제 차량과 다를 수 있어요.",
+  "sources": [
+    {
+      "model": "GRANDEUR",
+      "page": "https://www.hyundaimotorgroup.com/ko/news/hyundai-new-grandeur-design-reveal",
+      "additionalPage": "https://www.hyundai.com/kr/ko/e/vehicles/the-new-grandeur/intro"
+    },
+    {
+      "model": "AVANTE",
+      "page": "https://www.hyundaimotorgroup.com/ko/news/hyundai-motor-company-all-new-avante"
+    },
+    {
+      "model": "TUCSON",
+      "page": "https://www.hyundaimotorgroup.com/ko/news/hyundai-motor-company-the-all-new-tucson-design-reveal"
+    },
+    {
+      "model": "IONIQ3",
+      "page": "https://www.hyundai.news/eu/models/electrified/ioniq-3/images.html",
+      "market": "Europe; includes N Line"
+    }
+  ],
+  "rightsNote": "Copyright remains with the original publisher. These are manufacturer media sources, not CC0 assets. Refer to each source's current terms for redistribution; no blanket commercial license is asserted.",
+  "files": [
+    {
+      "file": "hy_grandeur_front.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000078839/67d076a63b124f6cb271aa278257fbdc.jpg"
+    },
+    {
+      "file": "hy_grandeur_rear.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000078840/80ed901c77d24b448380ee43173d4e78.jpg"
+    },
+    {
+      "file": "hy_grandeur_cabin.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000078841/cf4092c8f1134ddfa859b18770bdfa12.jpg"
+    },
+    {
+      "file": "hy_avante_front.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000082883/c4a0a4665478445cae52a0309e4f6181.jpg"
+    },
+    {
+      "file": "hy_avante_rear.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000082884/39e5a219a6994ad68479969135f2d087.jpg"
+    },
+    {
+      "file": "hy_avante_cabin.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000082885/9c87dcb9a05e452eb4d48ae7e78aeed0.jpg"
+    },
+    {
+      "file": "hy_avante_seats.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000082886/a8e7574bbab741fbb3361e9700217a25.jpg"
+    },
+    {
+      "file": "hy_tucson_front.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000083255/d0084f257a814d20bf68000409437ef6.jpg"
+    },
+    {
+      "file": "hy_tucson_rear.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000083256/bbe47f1062574539b64fb2d6f1cc0537.jpg"
+    },
+    {
+      "file": "hy_tucson_side.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000083257/2961666f4a1747618d207a36036cf8cd.jpg"
+    },
+    {
+      "file": "hy_tucson_cabin.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000083258/b4bd6206729c4e20b6357a194814c07a.jpg"
+    },
+    {
+      "file": "hy_tucson_seats.jpg",
+      "url": "https://www.hyundaimotorgroup.com/image/upload/asset_library/MDA00000000000083259/5f7e05caa2bf4eb88e07635eaa19a2e2.jpg"
+    },
+    {
+      "file": "hy_ioniq3_front.jpg",
+      "url": "https://www.hyundai.news/newsroom/dam/eu/models/20261005_ioniq_3_driving_experience/atlas_white/hyundai-ioniq-3-driving-experience-2026-atlas-white-1677.jpg"
+    },
+    {
+      "file": "hy_ioniq3_rear.jpg",
+      "url": "https://www.hyundai.news/newsroom/dam/eu/models/20261005_ioniq_3_driving_experience/atlas_white/hyundai-ioniq-3-driving-experience-2026-atlas-white-9327.jpg"
+    },
+    {
+      "file": "hy_ioniq3_cabin.jpg",
+      "url": "https://www.hyundai.news/newsroom/dam/eu/models/20260420_ioniq_3_unveil/hyundai-ioniq-3-unveil-0426-interior-01.jpg"
+    },
+    {
+      "file": "hy_ioniq3_seats.jpg",
+      "url": "https://www.hyundai.news/newsroom/dam/eu/models/20260420_ioniq_3_unveil/hyundai-ioniq-3-unveil-0426-interior-02.jpg"
+    },
+    {
+      "file": "hy_grandeur_profile.png",
+      "url": "https://www.hyundai.com/contents/repn-car/side-45/grandeur-27fl-45side.png"
+    }
+  ]
+}

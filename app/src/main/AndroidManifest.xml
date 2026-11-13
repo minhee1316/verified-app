@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 차량 신호 읽기 (AAOS). 권한이 없는 신호는 앱이 '미지원'으로 보고 대체 판정한다 -->
+    <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
+    <uses-permission android:name="android.car.permission.CAR_SPEED" />
+    <uses-permission android:name="android.car.permission.CAR_INFO" />
+    <uses-permission android:name="android.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="android.car.permission.CAR_EXTERIOR_LIGHTS" />
+    <uses-permission android:name="android.car.permission.READ_CAR_STEERING" />
+    <uses-permission android:name="android.car.permission.CAR_EXTERIOR_ENVIRONMENT" />
+    <uses-permission android:name="android.car.permission.READ_WINDSHIELD_WIPERS" />
+    <uses-permission android:name="android.car.permission.CAR_DYNAMICS_STATE" />
+    <uses-permission android:name="android.car.permission.CONTROL_CAR_DOORS" />
+    <uses-permission android:name="android.car.permission.CONTROL_CAR_SEATS" />
+    <uses-permission android:name="android.car.permission.CONTROL_CAR_CLIMATE" />
+    <uses-permission android:name="android.car.permission.CONTROL_CAR_WINDOWS" />
+    <!-- 승인 설치(서명 권한)용. 주행거리·타이어·실내등·크루즈 -->
+    <uses-permission android:name="android.car.permission.CAR_MILEAGE" />
+    <uses-permission android:name="android.car.permission.CAR_TIRES" />
+    <uses-permission android:name="android.car.permission.READ_CAR_INTERIOR_LIGHTS" />
+    <uses-permission android:name="android.car.permission.READ_ADAS_STATES" />
+    <!-- Android 16+에서 일반 앱이 실행 중 받는 위험 권한(MainActivity가 요청). 그 이전 차에서는 거부로만 돌아온다 -->
+    <uses-permission android:name="android.car.permission.CAR_MILEAGE_3P" />
+    <uses-permission android:name="android.car.permission.CAR_TIRES_3P" />
+    <uses-permission android:name="android.car.permission.READ_CAR_STEERING_3P" />
+    <uses-permission android:name="android.car.permission.READ_CAR_SEATS" />
+    <uses-permission android:name="android.car.permission.READ_CAR_EXTERIOR_LIGHTS" />
+    <!-- 현대 Pleos Vehicle SDK 읽기 권한(설치 때 선언만, 실행 중 동의 창 없음). 제어(CONTROL_*)는 쓰지 않는다 -->
+    <uses-permission android:name="pleos.car.permission.CAR_DOORS" />
+    <uses-permission android:name="pleos.car.permission.CAR_WINDOWS" />
+    <uses-permission android:name="pleos.car.permission.CAR_SEATS" />
+    <uses-permission android:name="pleos.car.permission.CAR_SAFETY" />
+    <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
+    <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
+    <!-- 경고등(Telltales)·타이어 공기압 API가 요구하는 제휴 승인 권한. 승인 전에는 거부되어 경고등은 '확인 불가'로 남는다 -->
+    <uses-permission android:name="pleos.car.permission.PRIVATE_CAR_SAFETY" />
+    <!-- 현대 내비(NaviHelper): 안내 정보 조회와 집 목적지 설정 -->
+    <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
+    <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" />
+    <!-- 등록 장소(집·학교) 판정용 차 GPS. 선언하지 않으면 실행 중 요청이 자동 거부된다. 좌표는 차 안에만 저장 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 판정을 화면 밖에서도 이어 가기 위한 포그라운드 서비스와 부팅 시작 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 차주가 휴대폰 알림을 켠 경우에만 HTTPS 전송 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- 차량 전용 기능이지만 폰 에뮬레이터 시연도 되도록 필수로 두지 않는다 -->
+    <uses-feature android:name="android.hardware.type.automotive" android:required="false" />
+
+    <!-- Android 11+ 패키지 가시성: TTS 엔진을 찾아야 음성 안내가 켜진다 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".VerifiedApp"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <uses-library android:name="android.car" android:required="false" />
+        <service
+            android:name=".MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse|location">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Vehicle state verdicts (valet parking, escort, school zone) that must continue while navigation is in the foreground" />
+        </service>
+        <!-- Gleo AI: component=service 함수 (화면 없이 처리) -->
+        <receiver android:name=".GleoReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="CHECK_VEHICLE_ODDITY" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <!-- 폰은 사용자의 자동 회전을 따른다(세로로 시작). 차(AAOS)는 MainActivity가 가로로 고정한다. 좁은 화면은 한 단으로 쌓인다 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:screenOrientation="fullUser"
+            android:launchMode="singleTask"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            android:windowSoftInputMode="adjustResize">
+            <!-- 주행 중에도 3줄 요약 화면을 띄울 수 있도록 운전 방해 최적화 앱으로 선언 -->
+            <meta-data android:name="distractionOptimized" android:value="true" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Gleo AI: component=activity 함수 (화면을 열어 사용자와 진행) -->
+            <intent-filter>
+                <action android:name="START_VALET_MODE" />
+                <action android:name="START_ESCORT" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
