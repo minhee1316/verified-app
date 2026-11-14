@@ -124,6 +124,8 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
                 (0 until a.length()).map { a.getJSONObject(it).let { r -> SharedKey(r.getString("name"), r.getString("until")) } }
             } ?: d.sharedKeys,
             enforcementAlert = o.optBoolean("enforcementAlert", d.enforcementAlert),
+            startHaptic = o.optBoolean("startHaptic", d.startHaptic),
+            quickOrder = o.optString("quickOrder").takeIf { it.isNotEmpty() }?.split(",")?.let { com.verified.incar.core.normalizeQuickOrder(it) } ?: d.quickOrder,
             memberPoints = o.optInt("memberPoints", d.memberPoints),
             ownerPinHash = o.optString("ownerPinHash").ifEmpty { null },
             ownerPinSalt = o.optString("ownerPinSalt").ifEmpty { null },
@@ -162,6 +164,8 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             .put("bookings", JSONArray(s.bookings.map { JSONObject().put("date", it.date).put("time", it.time).put("kind", it.kind).put("shop", it.shop).put("note", it.note) }))
             .put("sharedKeys", JSONArray(s.sharedKeys.map { JSONObject().put("name", it.name).put("until", it.until) }))
             .put("enforcementAlert", s.enforcementAlert)
+            .put("startHaptic", s.startHaptic)
+            .put("quickOrder", s.quickOrder.joinToString(","))
             .put("memberPoints", s.memberPoints)
             .put("ownerPinHash", s.ownerPinHash.orEmpty()).put("ownerPinSalt", s.ownerPinSalt.orEmpty())
             .put("ownerRecoveryHash", s.ownerRecoveryHash.orEmpty())
@@ -294,6 +298,7 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             result = snap("result"),
             prelimAtMs = if (o.has("prelimAt")) o.getLong("prelimAt") else null,
             confirmedBy = o.optString("confirmedBy").ifEmpty { null },
+            verificationPending = o.optString("verificationPending").ifEmpty { null },
             placeEstimated = o.optBoolean("placeEstimated"),
             moved = o.optBoolean("moved", true),
             proof = proofOf(o.optJSONArray("proof")),
@@ -357,6 +362,7 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             .putOpt("checkIn", checkJson(v.checkIn)).putOpt("checkOut", checkJson(v.checkOut)).put("prep", JSONArray(v.prep.map { it.name }))
             .putOpt("naviEta", v.naviEtaMs).put("naviOffWarned", v.naviOffWarned)
         v.prelimAtMs?.let { o.put("prelimAt", it) }
+        v.verificationPending?.let { o.put("verificationPending", it) }
         write("valet", o.toString(), now = true)
     }
 

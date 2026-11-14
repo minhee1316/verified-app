@@ -20,6 +20,11 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.outlined.Menu
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.DirectionsCar
@@ -101,9 +106,8 @@ import java.time.LocalDate
 enum class Root(val label: String, val icon: ImageVector, val selectedIcon: ImageVector) {
     HOME("홈", Icons.Outlined.Home, Icons.Filled.Home),
     CONTROL("제어", Icons.Outlined.DirectionsCar, Icons.Filled.DirectionsCar),
-    VERIFIED("기능", Icons.Outlined.Explore, Icons.Filled.Explore),
-    MYCAR("내 차", Icons.Outlined.Key, Icons.Filled.Key),
-    SHOP("샵", Icons.Outlined.ShoppingBag, Icons.Filled.ShoppingBag),
+    HISTORY("기록", Icons.Outlined.Description, Icons.Filled.Description),
+    MYPAGE("더보기", Icons.Outlined.Menu, Icons.Filled.Menu),
 }
 
 val moduleIcon = mapOf(
@@ -120,14 +124,13 @@ fun shortName(m: Module) = when (m) {
 }
 
 @Composable
-fun BottomNav(selected: String, showShop: Boolean = true, go: (String) -> Unit) {
+fun BottomNav(selected: String, go: (String) -> Unit) {
     Column {
         HorizontalDivider(color = C.line)
         // 폰 가로처럼 키가 낮으면 아이콘 옆에 이름을 붙여 한 줄로(높이 절반)
         val short = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp < 480
-        Row(Modifier.fillMaxWidth().background(C.card).selectableGroup()) {
-            // 샵은 예시 상품뿐이라 시연·체험 모드에서만 보인다
-            Root.entries.filter { showShop || it != Root.SHOP }.forEach { r ->
+        Row(Modifier.fillMaxWidth().background(C.bg).selectableGroup()) {
+            Root.entries.forEach { r ->
                 val on = r.name == selected
                 val m = Modifier.weight(1f).testTag("nav_${r.name}").selectable(selected = on, role = Role.Tab) { go(r.name) }
                     .heightIn(min = 48.dp).padding(vertical = if (short) 4.dp else 8.dp)
@@ -208,7 +211,7 @@ private fun RelatedFeature(title: String, detail: String, onClick: () -> Unit) {
 
 /** 원격제어 타일: 굵은 이름, 아래 상태(켜져 있으면 파랑), 오른쪽 아래 아이콘. */
 @Composable
-fun ControlTile(title: String, state: String, active: Boolean, icon: ImageVector, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun ControlTile(title: String, state: String, active: Boolean, icon: ImageVector, enabled: Boolean, modifier: Modifier = Modifier, busy: Boolean = false, onClick: () -> Unit) {
     Column(
         modifier.clip(RoundedCornerShape(12.dp)).background(C.card)
             .border(1.dp, C.line, RoundedCornerShape(12.dp))
@@ -217,7 +220,9 @@ fun ControlTile(title: String, state: String, active: Boolean, icon: ImageVector
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(icon, null, Modifier.size(22.dp), tint = if (enabled) C.title else C.sub)
+            // 차 신호로 결과를 기다리는 동안: 아이콘은 그대로 두고 바깥 링만 돈다
+            if (busy) SpinnerRing(30.dp, Modifier.testTag("control_busy")) { Icon(icon, null, Modifier.size(16.dp), tint = C.title) }
+            else Icon(icon, null, Modifier.size(22.dp), tint = if (enabled) C.title else C.sub)
             Text(title, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, color = C.ink)
         }
         Text(state, fontSize = 18.sp, color = if (active && enabled) C.title else C.sub)
@@ -311,94 +316,55 @@ fun ControlMH(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit) {
     val checking = pending?.kind
     val wait = if (pending?.unconfirmed == true) "결과 미확인" else "확인 중…"
     val remoteOn = u.engine.comfort.phase == com.verified.incar.core.ComfortPhase.REMOTE_RUNNING
+    // 꺼짐 → 켜짐으로 바뀌는 순간에만 진동(이미 켜진 채 화면에 들어올 때는 울리지 않음)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var wasOn by remember { mutableStateOf(remoteOn) }
+    androidx.compose.runtime.LaunchedEffect(remoteOn) {
+        if (remoteOn && !wasOn && u.settings.startHaptic) com.verified.incar.StartHaptic.play(context, u.settings.carModel?.ev == true)
+        wasOn = remoteOn
+    }
+    var inside by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    // 넓은 화면(차 디스플레이·가로)은 왼쪽에 차 그림, 오른쪽에 조작을 둬 그림이 잘리지 않게 한다
+    val wide = !isCompact()
+    val controls = @Composable {
+        if (inside) CabinTempBar(vm, u) else QuickControls(vm, u)
+        if (checking != null) Text("${checking.label} · $wait", fontSize = 15.sp, color = C.sub)
+    }
     TwoCol(left = {
-        SectionTitle("차량 조작")
-        TextRow("외관·실내 사진 보기", tag = "control_vehicle_view") { go("VEHICLE_VIEW") }
-        when {
-            u.settings.carModel == null -> InfoBanner("차량을 등록하면 지원 기능을 볼 수 있어요.") { go("CAR_SETUP") }
-            !can -> InfoBanner("실차 원격 제어는 마이현대에서 이용해 주세요. 여기서는 차량 상태를 확인할 수 있어요.")
-            else -> Text("시연 모드 · 명령은 시뮬레이터에 반영돼요.", fontSize = 16.sp, color = C.sub)
-        }
-        val columns = when {
-            isCramped() -> 1
-            isCompact() || androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 1100 -> 2
-            else -> 3
-        }
-        androidx.compose.foundation.layout.FlowRow(
-            Modifier.fillMaxWidth(), maxItemsInEachRow = columns,
-            horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            ControlTile("문", if (checking == ControlKind.LOCK || checking == ControlKind.UNLOCK) wait else u.read("lock", if (s.doorsLocked) "잠김 · 잠금 해제" else "잠금 해제 · 잠그기"), s.doorsLocked, if (s.doorsLocked) Icons.Outlined.Lock else Icons.Outlined.LockOpen, can, Modifier.weight(1f)) {
-                vm.act { sig, now -> control(if (sig.doorsLocked) ControlKind.UNLOCK else ControlKind.LOCK, sig, now) }
+        Card(Modifier.fillMaxWidth().testTag("control_top"), padding = 16.dp) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(u.settings.carModel?.label ?: "내 차", Modifier.weight(1f), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
+                Chip("외부", !inside, Modifier.testTag("control_exterior")) { inside = false }
+                Spacer(Modifier.width(6.dp))
+                Chip("실내", inside, Modifier.testTag("control_interior")) { inside = true }
             }
-            ControlTile("공조", if (checking == ControlKind.CLIMATE_ON || checking == ControlKind.CLIMATE_OFF) wait else u.read("ac", if (s.acOn) "켜짐 · 끄기" else "꺼짐 · 켜기"), s.acOn, Icons.Outlined.AcUnit, can, Modifier.weight(1f)) {
-                vm.act { sig, now -> control(if (sig.acOn) ControlKind.CLIMATE_OFF else ControlKind.CLIMATE_ON, sig, now) }
+            when {
+                u.settings.carModel == null -> InfoBanner("차량을 등록하면 지원 기능을 볼 수 있어요.") { go("CAR_SETUP") }
+                !can -> Text("실차 원격 제어는 마이현대에서 이용해 주세요. 여기서는 차 신호로 상태를 확인해요.", fontSize = 15.sp, color = C.sub)
+                else -> Unit
             }
-            ControlTile("미리 공조", if (remoteOn) "끄기" else "켜기", remoteOn, Icons.Outlined.Whatshot, can, Modifier.weight(1f)) {
-                vm.act { sig, now -> if (remoteOn) stopRemote() else startRemote(sig, now) }
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                CarTopView(vm, u, inside, if (wide) Modifier.width(230.dp) else Modifier.fillMaxWidth(0.62f))
             }
-            ControlTile("비상등", if (checking == ControlKind.HAZARD) wait else u.read("hazard", if (s.hazardOn) "켜짐 · 끄기" else "꺼짐 · 켜기"), s.hazardOn, Icons.Outlined.Warning, can, Modifier.weight(1f)) {
-                vm.act { sig, now -> control(ControlKind.HAZARD, sig, now) }
-            }
-            ControlTile("경적", "울리기", false, Icons.Outlined.Campaign, can, Modifier.weight(1f)) {
-                vm.act { sig, now -> control(ControlKind.HORN, sig, now) }
-            }
-            ControlTile("출발 예약", if (u.settings.schedule.enabled) "%02d:%02d".format(u.settings.schedule.hour, u.settings.schedule.minute) else "설정", u.settings.schedule.enabled, Icons.Outlined.Schedule, true, Modifier.weight(1f)) {
-                go(Module.COMFORT.name)
-            }
+            if (!wide) controls()
         }
     }, right = {
-        Card(Modifier.fillMaxWidth().testTag("control_evidence"), padding = 22.dp) {
-            val ev = u.engine.controlLog.firstOrNull()
-            CardHeader(null, "최근 제어 결과", trailing = { ev?.let { Pill(it.result.label, it.result.level) } })
-            if (ev == null) Text("아직 보낸 명령이 없어요. 명령을 실행하면 요청 시각과 확인 결과가 여기에 표시돼요.", fontSize = 17.sp, color = C.sub)
-            else {
-                Text(ev.kind.label, fontWeight = FontWeight.SemiBold, fontSize = 20.sp, color = C.ink)
-                ev.steps.forEach { (t, line) -> Text("${VerdictEngine.hhmmss(t)}  $line", fontSize = 16.sp, color = C.sub) }
+        if (wide) Card(Modifier.fillMaxWidth().testTag("control_actions"), padding = 16.dp) { controls() }
+        Card(Modifier.fillMaxWidth(), padding = 16.dp) {
+            MenuRow(Icons.Outlined.Whatshot, "미리 공조", if (remoteOn) "켜짐 · 끄기" else "꺼짐 · 켜기", tag = "control_remote") {
+                if (!can) vm.toast("실차 원격 공조는 마이현대에서 이용해 주세요.")
+                else vm.act { sig, now -> if (remoteOn) stopRemote() else startRemote(sig, now) }
             }
+            MenuRow(Icons.Outlined.Schedule, "출발 예약", if (u.settings.schedule.enabled) "%02d:%02d".format(u.settings.schedule.hour, u.settings.schedule.minute) else "설정") { go(Module.COMFORT.name) }
+            MenuRow(Icons.Outlined.DirectionsCar, "외관·실내 사진", "공식 사진", tag = "control_vehicle_view") { go("VEHICLE_VIEW") }
         }
-        Card(Modifier.fillMaxWidth(), padding = 22.dp) {
-            SectionTitle(u.settings.carModel?.label ?: "내 차 상태")
-            Battery(u)
-            KeyValue("기어", u.read("gear", "${s.gear}단"))
-            KeyValue("문 잠금", u.read("lock", if (s.doorsLocked) "잠김" else "잠금 해제"))
-        }
-    })
-}
-
-// ================================================================== 마이카 (차량 · 관리 · 카라이프)
-@Composable
-fun MyCarMH(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit) {
-    TwoCol(
-        tabs = "내 차" to "카라이프",left = {
-        Card(Modifier.fillMaxWidth(), padding = 26.dp) {
-            Text(u.settings.carModel?.label ?: "차량 미등록", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
-            BigButton("외관·실내 사진 보기", Modifier.fillMaxWidth().testTag("mycar_vehicle_view"), BtnStyle.OUTLINE) { go("VEHICLE_VIEW") }
-            val b = u.settings.bookings.firstOrNull()
-            if (b != null) InfoBanner("${b.date} ${b.time} ${b.kind} 예약 기록") { go("SERVICE") }
-            else u.homeStatus().verdict.let { verdict -> InfoBanner(verdict.word, verdict.tab?.let { target -> { go(target) } }) }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                BigButton("차량 공유", Modifier.weight(1f), fontSize = 20.sp) { go("KEY") }
-                BigButton("차량 관리", Modifier.weight(1f), fontSize = 20.sp) { go("SERVICE") }
+        // 보낸 명령이 있을 때만: 요청 시각과 차 신호로 확인한 결과
+        u.engine.controlLog.firstOrNull()?.let { ev ->
+            Card(Modifier.fillMaxWidth().testTag("control_evidence"), padding = 20.dp) {
+                CardHeader(null, "최근 제어 결과", trailing = { Pill(ev.result.label, ev.result.level) })
+                Text(ev.kind.label, fontWeight = FontWeight.SemiBold, fontSize = 19.sp, color = C.ink)
+                ev.steps.forEach { (t, line) -> Text("${VerdictEngine.hhmmss(t)}  $line", fontSize = 15.sp, color = C.sub) }
             }
-        }
-        Text(
-            "긴급출동 이용 안내", Modifier.fillMaxWidth().clickable(role = Role.Button) { vm.toast("실제 긴급출동 신청은 마이현대에서 이용해 주세요.") }.heightIn(min = 48.dp).padding(8.dp),
-            textAlign = TextAlign.Center, fontSize = 18.sp, color = C.sub, textDecoration = TextDecoration.Underline,
-        )
-    }, right = {
-        Card(Modifier.fillMaxWidth(), padding = 22.dp) {
-            MenuRow(Icons.Outlined.EvStation, "충전", u.read("soc", "${u.signals.socPct}%")) { go("SERVICE") }
-            MenuRow(Icons.Outlined.Build, "정비", u.consumables.count { it.due }.takeIf { it > 0 }?.let { "교체 시기 ${it}건" }, Level.WARN) { go("SERVICE") }
-            MenuRow(Icons.Outlined.Insights, "드라이빙 인사이트", u.thisWeek?.let { "이번 주 %.0fkm".format(it.km) }) { go("INSIGHT") }
-            MenuRow(Icons.Outlined.Key, "디지털 키", "${u.settings.sharedKeys.count { it.live() }}명 공유") { go("KEY") }
-        }
-        Card(Modifier.fillMaxWidth(), padding = 22.dp) {
-            SectionTitle("카라이프")
-            MenuRow(Icons.Outlined.LocalParking, "대리운전", "부르기") { go("CARLIFE") }
-            MenuRow(Icons.Outlined.LocalCarWash, "세차", "예약") { go("CARLIFE") }
-            MenuRow(Icons.Outlined.Notifications, "주정차 단속 알림", if (u.settings.enforcementAlert) "켜짐" else "꺼짐") { go("CARLIFE") }
-            MenuRow(Icons.Outlined.Explore, "주변 검색", "충전소·맛집") { go("CARLIFE") }
         }
     })
 }
@@ -418,37 +384,38 @@ fun SearchMH(go: (String) -> Unit, showMock: Boolean = true) {
 // ================================================================== 마이페이지 (사람 아이콘)
 @Composable
 fun MyPageMH(u: UiState, modules: List<Module>, go: (String) -> Unit) {
+    val locked = !u.ownerUnlocked && (u.engine.valet.active || u.engine.lend.active)
     TwoCol(left = {
-        Row(Modifier.fillMaxWidth().clickable { go("SETTINGS") }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(64.dp).clip(CircleShape).background(C.line), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Person, null, Modifier.size(38.dp), tint = Color.White) }
-            Text("  차주님 · ${u.settings.carModel?.label ?: "차량을 등록해 주세요"}", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
-            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = C.ink)
-        }
-        Card(Modifier.fillMaxWidth(), padding = 20.dp, onClick = { go("NOTICE") }) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("[알림]  " + (if (!u.ownerUnlocked && (u.engine.valet.active || u.engine.lend.active)) "차주 PIN을 넣으면 보여요" else u.notices.firstOrNull()?.title ?: "아직 보낸 알림이 없어요"), Modifier.weight(1f), fontSize = 18.sp, color = C.sub, maxLines = 1)
-                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = C.sub)
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(role = Role.Button, onClickLabel = "차량 등록·변경") { go("CAR_SETUP") }.padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(Modifier.size(56.dp).clip(CircleShape).background(C.chip), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Person, null, Modifier.size(32.dp), tint = C.sub)
             }
+            Column(Modifier.weight(1f)) {
+                Text("차주님", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
+                Text(u.settings.carModel?.label ?: "차량을 등록해 주세요", fontSize = 16.sp, color = C.sub)
+            }
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = C.sub)
         }
-        if (u.simAllowed) TextRow("블루멤버스 포인트", "적립 시연") { go("WALLET") }
-        Card(Modifier.fillMaxWidth(), padding = 24.dp) {
-            SectionTitle("차량 서비스")
-            TextRow("차량 관리", tag = "tab_SERVICE") { go("SERVICE") }
-            TextRow("드라이빙 인사이트", tag = "tab_INSIGHT") { go("INSIGHT") }
-            TextRow("디지털 키", tag = "tab_KEY") { go("KEY") }
-            TextRow("카라이프", tag = "tab_CARLIFE") { go("CARLIFE") }
-            if (u.simAllowed) TextRow("월렛", tag = "tab_WALLET") { go("WALLET") }
+        Card(Modifier.fillMaxWidth(), padding = 16.dp) {
+            SectionTitle("차량")
+            MenuRow(Icons.Outlined.Build, "차량 관리", tag = "tab_SERVICE") { go("SERVICE") }
+            MenuRow(Icons.Outlined.Insights, "드라이빙 인사이트", tag = "tab_INSIGHT") { go("INSIGHT") }
+            MenuRow(Icons.Outlined.Key, "디지털 키", tag = "tab_KEY") { go("KEY") }
+            MenuRow(Icons.Outlined.Explore, "카라이프", tag = "tab_CARLIFE") { go("CARLIFE") }
+            if (u.simAllowed) MenuRow(Icons.Outlined.QrCode2, "월렛", tag = "tab_WALLET") { go("WALLET") }
+            if (u.simAllowed && !u.trial) MenuRow(Icons.Outlined.ShoppingBag, "샵", tag = "tab_SHOP") { go("SHOP") }
         }
     }, right = {
-        Card(Modifier.fillMaxWidth(), padding = 24.dp) {
+        Card(Modifier.fillMaxWidth(), padding = 16.dp) {
             SectionTitle("확인됨 기능")
-            modules.forEach { m -> TextRow(m.title, statusOf(m, u).first, tag = "tab_${m.name}") { go(m.name) } }
-            TextRow("맡김 이력서", "${u.engine.history.size}건", tag = "tab_HISTORY") { go("HISTORY") }
+            MenuRow(Icons.Outlined.Explore, "상황별 기능", "${modules.size}개", tag = "tab_VERIFIED") { go("VERIFIED") }
+            MenuRow(Icons.Outlined.Description, "맡김 이력서", "${u.engine.history.size}건", tag = "tab_HISTORY") { go("HISTORY") }
         }
-        Card(Modifier.fillMaxWidth(), padding = 24.dp) {
+        Card(Modifier.fillMaxWidth(), padding = 16.dp) {
             SectionTitle("앱")
-            TextRow("보낸 알림", "${u.notices.size}건", tag = "tab_NOTICE") { go("NOTICE") }
-            TextRow("앱 설정", tag = "tab_SETTINGS") { go("SETTINGS") }
+            MenuRow(Icons.Outlined.Notifications, "보낸 알림", if (locked) "차주 확인 후" else "${u.notices.size}건", tag = "tab_NOTICE") { go("NOTICE") }
+            MenuRow(Icons.Outlined.Settings, "앱 설정", tag = "tab_SETTINGS") { go("SETTINGS") }
         }
     })
 }
@@ -898,6 +865,10 @@ fun HandoverCard(vm: VerifiedRuntime, u: UiState, kind: HandKind, focused: Boole
                 PhoneHeroWarn("${VerdictEngine.hhmm(it.atMs)} 맡긴 차가 정비소를 벗어났어요 · ${it.what.substringAfter(" · ")}")
             }
         }
+        // 맡길 때·돌려받을 때 같은 각도 사진. 돌려받은 뒤에는 이력서 기록(시작 시각)에 붙은 사진을 나란히 비교
+        val recordKind = if (lend) "빌려주기" else "맡김"
+        val photoStart = if (active) l.start?.timeMs else if (returned) u.engine.history.lastOrNull { it.kind == recordKind }?.startMs else null
+        HandoverPhotoPanel(vm, kind, photoStart, active, returned)
         if (active) HoldButton("반납 확인", Modifier.testTag(if (lend) "lend_end" else "service_end")) {
             val startMs = l.start?.timeMs
             vm.ownerOnly { vm.act { sig, now ->

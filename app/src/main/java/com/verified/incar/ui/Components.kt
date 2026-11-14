@@ -89,13 +89,14 @@ object C {
     val deep = Color(0xFF001E42)
     val blue = Color(0xFF00AAD2)
     val action get() = pick(0xFF195FAB, 0xFF9BC6FF)
-    val ice get() = pick(0xFFE8F1F8, 0xFF1E3354)
-    val bg get() = pick(0xFFF4F6F9, 0xFF0B1220)
-    val card get() = pick(0xFFFFFFFF, 0xFF162033)
-    val chip get() = pick(0xFFEFF2F6, 0xFF1F2B40)
+    /** 고른 칩 바탕 */
+    val ice get() = pick(0xFFE6EEF8, 0xFF1E3354)
+    val bg get() = pick(0xFFFFFFFF, 0xFF0B1220)
+    val card get() = pick(0xFFF6F7F9, 0xFF162033)
+    val chip get() = pick(0xFFE9ECF1, 0xFF1F2B40)
     val ink get() = pick(0xFF111827, 0xFFE5ECF5)
     val sub get() = pick(0xFF525F70, 0xFFB2BDCD)
-    val line get() = pick(0xFFE6EAF0, 0xFF2A3850)
+    val line get() = pick(0xFFE7EAEE, 0xFF2A3850)
     /** 머리말(kicker)·보강 표시에 쓰는 청록 */
     val teal get() = pick(0xFF007FA8, 0xFF5BC0E0)
     val ok get() = pick(0xFF126647, 0xFF88DEBD)
@@ -114,12 +115,13 @@ fun levelColor(l: Level?) = when (l) {
     null -> C.sub
 }
 
-private val cardShape = RoundedCornerShape(14.dp)
+private val cardShape = RoundedCornerShape(18.dp)
 
 @Composable
 fun Card(modifier: Modifier = Modifier, padding: Dp = 28.dp, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        modifier.clip(cardShape).background(C.card).border(1.dp, C.line, cardShape)
+        // 흰 바탕 위 옅은 회색 카드(테두리 없음)
+        modifier.clip(cardShape).background(C.card)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             // 폰 세로에서는 카드 안 여백을 18dp까지만(차 화면 값 28~36dp는 360dp 폰에서 글 칸을 너무 좁힌다)
             .padding(if (isCompact()) minOf(padding, 18.dp) else padding),
@@ -395,25 +397,6 @@ fun Wrap(spacing: Dp = 8.dp, content: @Composable RowScope.() -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(spacing),
         verticalArrangement = Arrangement.spacedBy(spacing),
     ) { content() }
-}
-
-/** 승차감 점수. */
-@Composable
-fun ScoreRing(score: Int?, size: Dp = 240.dp) {
-    Box(Modifier.size(size), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(size)) {
-            val w = this.size.width * 0.075f
-            val inset = w / 2 + 6f
-            val arc = Size(this.size.width - inset * 2, this.size.height - inset * 2)
-            drawArc(C.line, 0f, 360f, false, Offset(inset, inset), arc, style = Stroke(w))
-            val sweep = 360f * ((score ?: 0) / 100f)
-            drawArc(
-                C.title,
-                -88f, sweep, false, Offset(inset, inset), arc, style = Stroke(w, cap = StrokeCap.Round),
-            )
-        }
-        Text(score?.let { "${it}점" } ?: "대기", fontSize = (size.value * 0.22f).sp, fontWeight = FontWeight.Black, color = C.title)
-    }
 }
 
 /** ⑤ 재출발 속도 게이지: 0~50km/h 반원. */

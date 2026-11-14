@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -64,14 +65,16 @@ class MobileAuditTest {
         rule.waitForIdle()
     }
 
-    private val roots = setOf("HOME", "SHOP", "CONTROL", "MYCAR", "VERIFIED")
+    private val roots = setOf("HOME", "CONTROL", "HISTORY", "MYPAGE")
 
     private fun tab(id: String) {
         if (id in roots) rule.onNodeWithTag("nav_$id").performClick()
         else {
             rule.onNodeWithTag("nav_HOME").performClick(); rule.waitForIdle()
-            rule.onNodeWithTag("nav_MENU").performClick(); rule.waitForIdle()
-            rule.onNodeWithTag("tab_$id").performScrollTo().performClick()
+            rule.onNodeWithTag("nav_MYPAGE").performClick(); rule.waitForIdle()
+            // 기능 10개는 더보기에서 "상황별 기능" 한 줄로 합쳐져 있어 화면 경로로 바로 연다
+            if (rule.onAllNodesWithTag("tab_$id").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithTag("tab_$id").performScrollTo().performClick()
+            else vm.navigate.value = id
         }
         rule.waitForIdle()
     }

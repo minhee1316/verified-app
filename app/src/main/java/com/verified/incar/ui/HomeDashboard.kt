@@ -15,6 +15,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Badge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Thermostat
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.DirectionsCar
@@ -50,7 +54,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.Image
 import androidx.compose.material.icons.outlined.EvStation
 import androidx.compose.material.icons.outlined.Wifi
-import androidx.compose.material.icons.outlined._3dRotation
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -70,22 +73,109 @@ fun HomeMH(vm: VerifiedRuntime, u: UiState, modules: List<Module>, go: (String) 
     if (isCompact()) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (u.trial) TrialPanel(vm, u, go)
-            HandoverPanel(u, go)
-            VehicleOverview(u, status, go)
+            CarHero(vm, u, go)
+            HomeList(u, status, go)
             if (u.trialAvailable) TrialEntry(go)
-            if (u.simAllowed) DemoPreviews(go)
-            HomeFeatures(u, modules, go)
+            if (u.simAllowed && !u.trial) DemoPreviews(go)
         }
     } else {
-        TwoUp(28.dp, 20.dp, 20.dp, 16.dp, leftWeight = 1.05f, left = {
+        TwoUp(28.dp, 20.dp, 20.dp, 16.dp, leftWeight = 1f, left = {
             if (u.trial) TrialPanel(vm, u, go)
-            HandoverPanel(u, go)
-            HomeFeatures(u, modules, go)
-        }, right = {
-            VehicleOverview(u, status, go)
+            CarHero(vm, u, go)
             if (u.trialAvailable) TrialEntry(go)
-            if (u.simAllowed) DemoPreviews(go)
+            if (u.simAllowed && !u.trial) DemoPreviews(go)
+        }, right = {
+            HomeList(u, status, go)
         })
+    }
+}
+
+/** 맨 위: 차 이름 · 배터리 · 주차 상태 → 차 사진 → 빠른 제어 4개. */
+@Composable
+private fun CarHero(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit) {
+    val model = u.settings.carModel
+    val s = u.signals
+    Column(Modifier.fillMaxWidth().testTag("home_hero").padding(horizontal = 4.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(model?.label ?: "내 차", color = C.ink, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                val state = when {
+                    s.uxRestricted -> "주행 중"
+                    s.gear == com.verified.incar.core.Gear.P -> "주차됨"
+                    else -> "${s.gear}단"
+                }
+                Text("배터리·연료 ${u.homeReading("soc", "${s.socPct}%")} · ${u.read("gear", state)}", color = C.sub, fontSize = 16.sp)
+            }
+            if (model == null) HomeActionText("차량 등록") { go("CAR_SETUP") }
+        }
+        if (model != null) Box(Modifier.fillMaxWidth().clickable(role = Role.Button, onClickLabel = "외관·실내 사진 보기") { go("VEHICLE_VIEW") },
+            contentAlignment = Alignment.Center) {
+            CarPhoto(model, Modifier.fillMaxWidth(0.95f).heightIn(max = 200.dp))
+        }
+        QuickControls(vm, u)
+    }
+}
+
+/** 기능 목록: 아이콘 · 이름 · 현재 값 · ›. 차량 → 맡기고 돌려받기 → 기록과 관리 → 더 보기 순서. */
+@Composable
+private fun HomeList(u: UiState, status: HomeStatus, go: (String) -> Unit) {
+    val s = u.signals
+    val valet = u.engine.valet
+    val lend = u.engine.lend
+    Card(Modifier.fillMaxWidth().testTag("home_list"), padding = 12.dp) {
+        if (valet.active) {
+            val action = when (valet.phase) {
+                ValetPhase.CONSENT -> "기사 동의하기"
+                ValetPhase.COMPLETE, ValetPhase.INCOMPLETE -> "결과 확인하고 돌려받기"
+                else -> "진행 상황 보기"
+            }
+            ActiveHandover("대리 주차 · ${valet.phase.label}", valet.handover?.timeMs, action) { go("VALET") }
+        }
+        if (lend.active) {
+            val service = lend.kind == HandKind.SERVICE
+            ActiveHandover(if (service) "정비 맡김 진행 중" else "빌려주기 진행 중", lend.start?.timeMs, "반납 확인하기") {
+                go(if (service) "HAND_SERVICE" else "HAND_LEND")
+            }
+        }
+        status.alerts.take(3).forEach { alert ->
+            ListItem(Icons.Outlined.Warning, alert.name, alert.value, Modifier.testTag("home_alert_${alert.id}"), warn = true) { go(alert.route) }
+        }
+        val verdict = status.verdict
+        ListItem(Icons.Outlined.DirectionsCar, "컨트롤", "위에서 보며 문·트렁크·좌석 확인", Modifier.testTag("home_control")) { go("CONTROL") }
+        ListItem(Icons.Outlined.Thermostat, "실내 온도",
+            "설정 ${u.read("hvacTemp", "%.1f℃".format(s.hvacTempC))} · 공조 ${u.read("hvacPower", if (s.hvacPowerOn) "켜짐" else "꺼짐")}") { go("CONTROL") }
+        ListItem(if (verdict.level == Level.OK) Icons.Outlined.CheckCircle else Icons.Outlined.Warning, "차 상태", verdict.word,
+            Modifier.testTag("home_verdict"), warn = verdict.level == Level.WARN || verdict.level == Level.DANGER) { go(verdict.tab ?: "VEHICLE_VIEW") }
+        ListSection("맡기고 돌려받기")
+        if (!valet.active && !lend.active) {
+            ListItem(Icons.Outlined.LocalParking, "대리 맡기기", "집 앞 P단·시동 OFF로 완료 확인", Modifier.testTag("home_hand_valet")) { go("VALET") }
+            ListItem(Icons.Outlined.Build, "정비 맡기기", "맡길 때와 돌려받을 때 비교", Modifier.testTag("home_hand_service")) { go("HAND_SERVICE") }
+            ListItem(Icons.Outlined.Key, "빌려주기", "시동·문 열림·급감속 기록", Modifier.testTag("home_hand_lend")) { go("HAND_LEND") }
+        }
+        ListItem(Icons.Outlined.Description, "맡김 이력서", "지난 기록 모아 보기", Modifier.testTag("home_hand_history")) { go("HISTORY") }
+        ListSection("더 보기")
+        ListItem(Icons.Outlined.Explore, "상황별 기능", "부축 동행·스쿨존·첫 운전 등") { go("VERIFIED") }
+        ListItem(Icons.Outlined.Search, "기능·증상 검색", null, Modifier.testTag("home_search")) { go("SEARCH") }
+    }
+}
+
+@Composable
+private fun ListSection(title: String) {
+    HorizontalDivider(Modifier.padding(top = 6.dp), color = C.line)
+    Text(title, Modifier.padding(start = 6.dp, top = 8.dp, bottom = 2.dp), color = C.sub, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun ListItem(icon: ImageVector, title: String, sub: String?, modifier: Modifier = Modifier, warn: Boolean = false, onClick: () -> Unit) {
+    Row(modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(role = Role.Button, onClick = onClick)
+        .heightIn(min = 56.dp).padding(horizontal = 6.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, null, Modifier.size(24.dp), tint = if (warn) C.warn else C.ink)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(title, color = C.ink, fontSize = 19.sp, fontWeight = FontWeight.Medium)
+            if (sub != null) Text(sub, color = if (warn) C.warn else C.sub, fontSize = 15.sp)
+        }
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, Modifier.size(22.dp), tint = C.sub)
     }
 }
 
@@ -97,9 +187,6 @@ private fun DemoPreviews(go: (String) -> Unit) {
         HomeLink("전기차 경로", null, Icons.Outlined.EvStation, Modifier.testTag("demo_EV_ROUTE")) { go("EV_ROUTE") }
         HomeLink("발레 감시", null, Icons.Outlined.LocalParking, Modifier.testTag("demo_VALET_WATCH")) { go("VALET_WATCH") }
         HomeLink("무선 연결 진단", null, Icons.Outlined.Wifi, Modifier.testTag("demo_RADIO_DIAG")) { go("RADIO_DIAG") }
-        val context = androidx.compose.ui.platform.LocalContext.current
-        if (androidx.compose.runtime.remember { hasCar3D(context) })
-            HomeLink("3D로 둘러보기", null, Icons.Outlined._3dRotation, Modifier.testTag("demo_CAR_3D")) { go("CAR_3D") }
     }
 }
 
@@ -143,119 +230,6 @@ private fun TrialPanel(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit) {
 }
 
 @Composable
-private fun VehicleOverview(u: UiState, status: HomeStatus, go: (String) -> Unit) {
-    val compact = isCompact()
-    val verdict = status.verdict
-    val shape = RoundedCornerShape(16.dp)
-    Column(Modifier.fillMaxWidth().testTag("home_verdict").clip(shape).background(C.card).border(1.dp, C.line, shape)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = if (compact) 16.dp else 22.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            val model = u.settings.carModel
-            if (model == null) Icon(Icons.Outlined.DirectionsCar, null, Modifier.size(30.dp), tint = C.title)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(model?.label ?: "내 차", color = C.ink, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("배터리·연료  ${u.homeReading("soc", "${u.signals.socPct}%")}", color = C.sub, fontSize = 16.sp)
-            }
-            if (model == null) HomeActionText("차량 등록") { go("CAR_SETUP") }
-            else Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CarPhoto(model, Modifier.width(if (compact) 120.dp else 150.dp).heightIn(max = 60.dp))
-                HomeActionText("차량 사진") { go("VEHICLE_VIEW") }
-            }
-        }
-        Column(Modifier.fillMaxWidth().background(if (C.dark) Color(0xFF233348) else Color(0xFF203445))
-            .then(verdict.tab?.let { target -> Modifier.clickable(role = Role.Button) { go(target) } } ?: Modifier)
-            .padding(horizontal = if (compact) 16.dp else 22.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                val icon = when (verdict.level) {
-                    Level.OK -> Icons.Outlined.CheckCircle
-                    Level.WARN, Level.DANGER -> Icons.Outlined.Warning
-                    Level.INFO -> Icons.Outlined.Info
-                }
-                val tint = when (verdict.level) {
-                    Level.OK -> Color(0xFF95E6C4)
-                    Level.WARN -> Color(0xFFFFD38F)
-                    Level.DANGER -> Color(0xFFFFB7B8)
-                    Level.INFO -> Color.White
-                }
-                Icon(icon, null, Modifier.size(26.dp), tint = tint)
-                Text(verdict.word, Modifier.weight(1f), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 24.sp)
-                if (verdict.tab != null) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = Color.White)
-            }
-            if (verdict.level != Level.OK && verdict.detail.isNotEmpty()) Text(verdict.detail, color = Color.White, fontSize = 17.sp)
-            Text(verdict.basis, color = Color(0xFFCFDAE2), fontSize = 15.sp)
-        }
-        status.alerts.take(3).forEach { alert ->
-            Row(Modifier.fillMaxWidth().testTag("home_alert_${alert.id}").clickable(role = Role.Button) { go(alert.route) }
-                .heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text(alert.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = C.warn)
-                    Text(alert.value, fontSize = 15.sp, color = C.sub)
-                }
-                Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = C.sub)
-            }
-        }
-        VehicleChecklist(status, go)
-    }
-}
-
-private data class HandoverAction(val label: String, val icon: ImageVector, val route: String, val tag: String)
-
-private val handoverActions = listOf(
-    HandoverAction("대리 맡기기", Icons.Outlined.LocalParking, "VALET", "home_hand_valet"),
-    HandoverAction("정비 맡기기", Icons.Outlined.Build, "HAND_SERVICE", "home_hand_service"),
-    HandoverAction("빌려주기", Icons.Outlined.Key, "HAND_LEND", "home_hand_lend"),
-)
-
-@Composable
-private fun HandoverPanel(u: UiState, go: (String) -> Unit) {
-    val valet = u.engine.valet
-    val lend = u.engine.lend
-    Card(Modifier.fillMaxWidth(), padding = 16.dp) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("맡기고 돌려받기", Modifier.weight(1f), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
-            HomeActionText("맡김 이력서", Modifier.testTag("home_hand_history")) { go("HISTORY") }
-        }
-        if (valet.active) {
-            val action = when (valet.phase) {
-                ValetPhase.CONSENT -> "기사 동의하기"
-                ValetPhase.COMPLETE, ValetPhase.INCOMPLETE -> "결과 확인하고 돌려받기"
-                else -> "진행 상황 보기"
-            }
-            ActiveHandover("대리 주차 · ${valet.phase.label}", valet.handover?.timeMs, action) { go("VALET") }
-        }
-        if (lend.active) {
-            val service = lend.kind == HandKind.SERVICE
-            ActiveHandover(if (service) "정비 맡김 진행 중" else "빌려주기 진행 중", lend.start?.timeMs, "반납 확인하기") {
-                go(if (service) "HAND_SERVICE" else "HAND_LEND")
-            }
-        }
-        if (!valet.active && !lend.active) HandoverActions(go)
-    }
-}
-
-@Composable
-private fun HandoverActions(go: (String) -> Unit) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        if (maxWidth < 250.dp || LocalDensity.current.fontScale >= 1.3f) Column {
-            handoverActions.forEach { action ->
-                HomeLink(action.label, null, action.icon, Modifier.testTag(action.tag)) { go(action.route) }
-            }
-        } else Row(Modifier.fillMaxWidth()) {
-            handoverActions.forEach { action ->
-                Column(Modifier.weight(1f).testTag(action.tag).clip(RoundedCornerShape(8.dp))
-                    .clickable(role = Role.Button) { go(action.route) }.heightIn(min = 64.dp).padding(vertical = 6.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(action.icon, null, Modifier.size(26.dp), tint = C.title)
-                    Text(action.label, color = C.ink, fontSize = 16.sp, textAlign = TextAlign.Center)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun ActiveHandover(label: String, start: Long?, action: String, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().testTag("home_active").clip(RoundedCornerShape(10.dp)).background(C.chip)
         .clickable(role = Role.Button, onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -268,79 +242,11 @@ private fun ActiveHandover(label: String, start: Long?, action: String, onClick:
 }
 
 @Composable
-private fun HomeSearch(go: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().testTag("home_search")
-        .clickable(role = Role.Button) { go("SEARCH") }.heightIn(min = 48.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Icon(Icons.Outlined.Search, null, Modifier.size(24.dp), tint = C.title)
-        Text("기능·증상 검색", Modifier.weight(1f), color = C.ink, fontSize = 19.sp)
-        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = C.sub)
-    }
-}
-
-@Composable
-private fun VehicleChecklist(status: HomeStatus, go: (String) -> Unit) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().testTag("home_checklist").padding(horizontal = 16.dp, vertical = 4.dp)) {
-        Row(Modifier.fillMaxWidth().semantics { stateDescription = if (expanded) "펼쳐짐" else "접힘" }
-            .clickable(role = Role.Button) { expanded = !expanded }.heightIn(min = 48.dp),
-            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("차 상태", Modifier.weight(1f), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
-            Text(status.checklistSummary, color = C.ink, fontSize = 16.sp)
-            Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, tint = C.sub)
-        }
-        val checks = if (expanded) status.visibleChecks else emptyList()
-        checks.forEach { check ->
-            HorizontalDivider(color = C.line)
-            Row(Modifier.fillMaxWidth().clickable(role = Role.Button) { go(check.route) }.heightIn(min = 48.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(check.name, Modifier.weight(1f), fontSize = 18.sp, color = C.ink)
-                Column(Modifier.weight(1.4f), horizontalAlignment = Alignment.End) {
-                    Text(check.value, color = C.ink, fontWeight = FontWeight.SemiBold, fontSize = 18.sp, textAlign = TextAlign.End)
-                    check.readAtMs?.let { Text("${VerdictEngine.hhmm(it)} 수신", color = C.sub, fontSize = 14.sp) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun HomeActionText(label: String, modifier: Modifier = Modifier, action: () -> Unit) {
     Row(modifier.clickable(role = Role.Button, onClick = action).heightIn(min = 48.dp).padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Text(label, color = C.title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, Modifier.size(18.dp), tint = C.title)
-    }
-}
-
-@Composable
-private fun HomeFeatures(u: UiState, modules: List<Module>, go: (String) -> Unit) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    Card(Modifier.fillMaxWidth(), padding = 16.dp) {
-        HomeSearch(go)
-        HorizontalDivider(color = C.line)
-        Row(Modifier.fillMaxWidth().testTag("home_more").semantics { stateDescription = if (expanded) "펼쳐짐" else "접힘" }
-            .clickable(role = Role.Button) { expanded = !expanded }.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("기록과 자주 쓰는 기능", Modifier.weight(1f), color = C.ink, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-            Icon(if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore, null, tint = C.sub)
-        }
-        if (!expanded) return@Card
-        Text("기록과 관리", color = C.ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        val protectRecords = u.ownerPinSet && !u.ownerUnlocked && (u.engine.valet.active || u.engine.lend.active)
-        val distance = if (protectRecords) null else u.thisWeek?.let { "%.1f km".format(it.km) } ?: "기록 없음"
-        HomeLink("이번 주 주행", distance, Icons.Outlined.Receipt) { go("INSIGHT") }
-        HomeLink("소모품 교체 시기", null, Icons.Outlined.Build) { go("SERVICE") }
-        HomeLink("주차 위치", u.engine.floor.confirmed?.let { "지하 ${it}층" }, Icons.Outlined.LocalParking) { go("TRUNK") }
-        HorizontalDivider(color = C.line)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("자주 쓰는 기능", Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = C.ink)
-            HomeActionText("편집") { go("SETTINGS") }
-        }
-        modules.forEach { module ->
-            val alert = statusOf(module, u).takeIf { it.second == Level.DANGER }
-            HomeLink(shortName(module), alert?.first, moduleIcon[module] ?: Icons.Outlined.Badge) { go(module.name) }
-        }
-        HomeActionText("상황별 기능 보기") { go("VERIFIED") }
     }
 }
 

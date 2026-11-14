@@ -62,8 +62,7 @@ class RealCarAuditTest {
         vm.setOwnerPin("2468")
         vm.act { _, _ -> startValet(); emptyList() }
         rule.onNodeWithTag("nav_HOME").performClick(); rule.waitForIdle()
-        rule.onNodeWithTag("nav_MENU").performClick(); rule.waitForIdle()
-        rule.onNodeWithTag("tab_TRIP").performScrollTo().performClick(); rule.waitForIdle()
+        vm.navigate.value = "TRIP"; rule.waitForIdle()
         rule.onNodeWithTag("pin_pad", useUnmergedTree = true).assertExists()
 
         vm.sim { it.copy(gear = Gear.D, speedKmh = 30f) }; rule.waitForIdle()

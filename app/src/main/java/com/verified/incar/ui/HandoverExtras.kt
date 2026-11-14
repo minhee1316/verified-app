@@ -40,7 +40,7 @@ internal fun FineCheckCard(history: List<HandoverRecord>) {
             textStyle = LocalTextStyle.current.copy(color = C.ink, fontSize = 18.sp),
         )
         when {
-            text.isBlank() -> Text("고지서의 단속 일시를 넣으면 그때 차를 맡긴 상태였는지 찾아 줘요.", fontSize = 17.sp, color = C.sub)
+            text.isBlank() -> Text("단속 시각에 차를 맡긴 상태였는지 찾아 줘요.", fontSize = 16.sp, color = C.sub)
             at == null -> Text("연도·월·일·시·분을 모두 넣어 주세요.", fontSize = 17.sp, color = C.warn)
             hit == null -> Text("이 시각에 맡긴 기록이 없어요.", fontSize = 18.sp, color = C.ink)
             else -> Text(
@@ -48,7 +48,6 @@ internal fun FineCheckCard(history: List<HandoverRecord>) {
                 fontSize = 18.sp, color = C.ink,
             )
         }
-        Note("의견 진술이나 업체와 이야기할 때 쓰는 설명 자료예요. 납부 책임을 정해 주지는 않아요.")
     }
 }
 

@@ -6,8 +6,8 @@ import java.time.ZoneId
 import kotlin.math.abs
 
 enum class ValetPhase(val label: String) {
-    IDLE("꺼짐"), CONSENT("기사 동의 대기"), DRIVING("집으로 운행 중"), PRELIM("1차 완료 저장됨"),
-    COMPLETE("주차 완료"), INCOMPLETE("미완료 하차 경고"), CLOSED_BY_OWNER("차주 승인 종료"),
+    IDLE("꺼짐"), CONSENT("기사 동의 대기"), DRIVING("진행 중 · 집으로 운행"), PRELIM("완료 확인 중"),
+    COMPLETE("완료 확인"), INCOMPLETE("확인 필요 · 목적지 밖 하차"), CLOSED_BY_OWNER("차주 직접 종료"),
 }
 
 data class ValetState(
@@ -16,6 +16,8 @@ data class ValetState(
     val result: Snapshot? = null,
     val prelimAtMs: Long? = null,
     val confirmedBy: String? = null,
+    /** 자동 판정을 보류하는 이유. 위치 재수신·복구 뒤에도 저장한다. */
+    val verificationPending: String? = null,
     val placeEstimated: Boolean = false,
     val restoreMsg: String? = null,
     /** 기사가 차를 움직였는지. 출발 전(키를 받으러 문을 여는 등)에는 완료·미완료를 판정하지 않는다. */
@@ -85,9 +87,7 @@ data class SchoolState(
     val warned: Boolean = false,
 )
 
-data class ChauffeurState(val manual: Boolean = false, val active: Boolean = false, val driven: Boolean = false, val brakes: Int = 0, val accels: Int = 0) {
-    val score get() = (100 - 6 * brakes - 4 * accels).coerceAtLeast(0)
-}
+data class ChauffeurState(val manual: Boolean = false, val active: Boolean = false, val driven: Boolean = false, val brakes: Int = 0, val accels: Int = 0)
 
 data class TrunkState(val loaded: Boolean = false, val loadedAt: String? = null, val askConfirm: Boolean = false, val reminded: Boolean = false, val openedAtMs: Long? = null)
 
@@ -307,6 +307,10 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
 
     private fun placeKnown(s: Signals) = !s.gpsLost && caps.locationWithoutRoute
 
+    /** 대리 판정은 마지막 장소 추정 대신 현재 수신한 위치만 쓴다. 실차는 30초 이내 관측이 필요하다. */
+    fun valetLocationKnown(s: Signals, nowMs: Long): Boolean = placeKnown(s) && known("gps", s) &&
+        (!onCar || s.seenAt["gps"]?.let { nowMs - it in 0..30_000L } == true)
+
     private fun seated2(s: Signals) = if (caps.row2Occupancy) s.row2Seated else s.row2Belt
 
     /** 실제로 움직이는지. 차속을 못 읽으면(위험 권한 거부) 기어로 대신 본다. */
@@ -337,7 +341,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
 
         val place = effectivePlace(s)
         val stoppedMs = state.stoppedSinceMs?.let { nowMs - it } ?: 0L
-        valet(s, place, stoppedMs, nowMs, shutdown, fx)
+        valet(s, stoppedMs, nowMs, shutdown, fx)
         if (on(Module.DRIVER)) driver(s, p, nowMs, fx)
         comfort(s, p, prev == null, nowMs, fx)
         if (on(Module.TRIP)) trip(s, p, place, stoppedMs, nowMs, shutdown, fx)
@@ -418,17 +422,18 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
         state = state.copy(valet = ValetState())
     }
 
-    /** 2단계 커밋 복구: 1차 완료만 저장된 채 전원이 꺼졌다면, 다시 켜질 때 완료로 확정한다. */
-    fun recoverValet(saved: ValetState): List<Effect> {
-        if (saved.phase != ValetPhase.PRELIM) {
-            state = state.copy(valet = saved)
-            return emptyList()
-        }
-        val v = saved.copy(phase = ValetPhase.COMPLETE, confirmedBy = "시동 OFF (전원 차단 뒤 복구)")
-        // 도착 상태를 읽기 전에 꺼졌으므로 바뀐 것은 '확인 불가'로 남는다
-        record("대리", v.handover?.timeMs ?: 0, v.prelimAtMs ?: 0, v.checkIn, null, 0f, 0, ok = true)
-        state = state.copy(valet = v)
-        return listOf(Effect.Notify("차주 폰", "① 대리 주차 완료", completeBody(v), Level.OK))
+    /**
+     * 재부팅은 시동 OFF·정상 인계의 증거가 아니다. 미확정 상태만 복구하고 새 신호로 다시 판정한다.
+     * 이미 확정된 결과는 보존하며 복구만으로 알림이나 성공 이력을 만들지 않는다.
+     */
+    fun recoverValet(saved: ValetState, rebooted: Boolean = true): List<Effect> {
+        val restored = if (saved.tracking && rebooted) saved.copy(
+            prelimAtMs = null,
+            verificationPending = "재부팅 후 위치와 차량 신호를 다시 확인하고 있어요. 자동 완료는 아직 확인되지 않았어요.",
+        ) else saved
+        state = state.copy(valet = restored, stoppedSinceMs = null)
+        prev = null
+        return emptyList()
     }
 
     /** 시트를 뒤로 미는 제어라 뒷좌석이 비어 있을 때만 허용한다. */
@@ -446,22 +451,31 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
         return if (msg == null) listOf(Effect.RestoreSeat, Effect.Toast("차주 설정 복원 완료")) else listOf(Effect.Toast(msg))
     }
 
-    private fun valet(s: Signals, place: Place, stoppedMs: Long, nowMs: Long, shutdown: Boolean, fx: MutableList<Effect>) {
+    private fun valet(s: Signals, stoppedMs: Long, nowMs: Long, shutdown: Boolean, fx: MutableList<Effect>) {
         var v = state.valet
         if (!v.tracking) return
         val driverLeft = (known("row2Occupancy", s) && !s.driverSeated) || (known("doors", s) && s.driverDoorOpen)
         val engineOff = shutdown || (known("ignition", s) && !s.ignitionOn)
         val parked = known("speed", s) && s.speedKmh == 0f && ((known("gear", s) && s.gear == Gear.P) || engineOff)
         val movingNow = known("speed", s) && s.speedKmh > 0f
-        val home = place == Place.HOME && known("gps", s)
+        val locationKnown = valetLocationKnown(s, nowMs)
+        val home = locationKnown && s.place == Place.HOME
+        if (locationKnown) v = v.copy(verificationPending = null)
         when {
-            !stopped(s) && (!onCar || movingNow) -> v = v.copy(phase = ValetPhase.DRIVING, prelimAtMs = null, moved = true)
+            !stopped(s) && (!onCar || movingNow) -> v = v.copy(phase = ValetPhase.DRIVING, prelimAtMs = null, moved = true,
+                verificationPending = if (locationKnown) null else "위치 신호를 기다리고 있어요. 목적지 도착 판정을 보류합니다.")
             !v.moved || !parked -> {}
+            !locationKnown -> v = v.copy(
+                phase = if (v.phase == ValetPhase.INCOMPLETE) v.phase else ValetPhase.PRELIM,
+                prelimAtMs = null,
+                verificationPending = "위치 신호를 기다리고 있어요. 완료·목적지 밖 하차 판정을 보류합니다.",
+            )
             home -> {
+                v = v.copy(verificationPending = null)
                 if (v.prelimAtMs == null) {
                     v = v.copy(phase = ValetPhase.PRELIM, prelimAtMs = nowMs, placeEstimated = !placeKnown(s))
                     v = v.copy(proof = v.proof + Proof(nowMs, if (s.gear == Gear.P) "P단" else "정차·시동 OFF", src("gear", s)) + placeProof(s, nowMs, v.placeEstimated))
-                    fx += Effect.Toast("P단 진입: 1차 완료를 먼저 저장했어요")
+                    fx += Effect.Toast("P단 확인 · 완료 확인 중(기록 저장됨)")
                 }
                 val by = when {
                     engineOff -> "시동 OFF"
@@ -485,20 +499,21 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                     fx += Effect.Speak("주차 완료가 확인됐어요. 수고하셨습니다.")
                 }
             }
-            driverLeft || shutdown -> if (v.phase != ValetPhase.INCOMPLETE) {
+            driverLeft || engineOff -> if (v.phase != ValetPhase.INCOMPLETE) {
                 val out = carCheck(s, nowMs)
                 val changes = v.checkIn?.let { diffChecks(it, out) }
-                v = v.copy(phase = ValetPhase.INCOMPLETE, result = snap(s, nowMs), placeEstimated = !placeKnown(s), checkOut = out)
-                v = v.copy(proof = v.proof + Proof(nowMs, if (shutdown) "시동 OFF" else "운전석 하차", src(if (shutdown) "ignition" else "row2Occupancy", s)) + placeProof(s, nowMs, v.placeEstimated))
+                v = v.copy(phase = ValetPhase.INCOMPLETE, result = snap(s, nowMs), placeEstimated = false, checkOut = out, verificationPending = null)
+                v = v.copy(proof = v.proof + Proof(nowMs, if (engineOff) "시동 OFF" else "운전석 하차", src(if (engineOff) "ignition" else if (s.driverDoorOpen) "doors" else "row2Occupancy", s)) + placeProof(s, nowMs, v.placeEstimated))
                 val where = if (placeKnown(s)) "${s.place.label} 부근" else "위치 미확인(직접 확인 필요)"
                 fx += Effect.Notify(
-                    "차주 폰", "① 집이 아닌 곳에서 기사가 내렸어요",
+                    "차주 폰", if (driverLeft) "① 집이 아닌 곳에서 기사가 내렸어요" else "① 목적지 밖에서 시동이 꺼졌어요",
                     "$where. 직접 운전하지 마시고 대리 재호출이나 긴급출동을 이용하세요. 근거: ${proofLine(v.proof)}" +
                         (changes?.let { " · 바뀐 것: " + it.joinToString(", ") } ?: ""), Level.DANGER,
                 )
                 changes?.let { v = v.copy(proof = v.proof + changesProof(it, nowMs)) }
                 fx += Effect.Speak("목적지가 아닌 곳이에요. 차주 확인 전까지 잠시만 기다려 주세요.")
             }
+            else -> v = v.copy(phase = ValetPhase.DRIVING, prelimAtMs = null)
         }
         if (v.phase == ValetPhase.DRIVING) v = navi(v, s, nowMs, fx)
         state = state.copy(valet = v)
@@ -1615,7 +1630,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             ("① 대리: ${st.valet.phase.label}" + (st.valet.naviEtaMs?.takeIf { st.valet.phase == ValetPhase.DRIVING }?.let { " · ${hhmm(it)} 도착 예정" } ?: "")).takeIf { st.valet.active },
             "④ 동행: ${st.escort.phase.label}".takeIf { st.escort.phase != EscortPhase.OFF },
             "⑤ 스쿨존: ${st.school.phase.label} · 최고 %.0fkm/h".format(st.school.maxSpeed).takeIf { st.school.phase == SchoolPhase.WATCH },
-            "⑥ 승차감: ${st.chauffeur.score}점".takeIf { st.chauffeur.active },
+            "⑥ 승차감: 급감속 ${st.chauffeur.brakes}회 · 급가속 ${st.chauffeur.accels}회".takeIf { st.chauffeur.active },
             "③ 운행 기록 중 (${st.trip.open?.from?.label} 출발)".takeIf { st.trip.open != null },
             "② 운전자: ${st.driver.name}".takeIf { st.driver.verdict != DriverVerdict.NOT_CHECKED },
         ).take(3).ifEmpty { listOf("확인됨이 차 상태를 지켜보고 있어요") }

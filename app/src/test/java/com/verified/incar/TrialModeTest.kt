@@ -114,7 +114,7 @@ class TrialModeTest {
         rule.setContent { MaterialTheme { App(vm) } }
         rule.waitForIdle()
         rule.onNodeWithTag("trial_panel").assertExists()
-        rule.onNodeWithTag("nav_SHOP").assertExists()
+        rule.onNodeWithTag("nav_SHOP").assertDoesNotExist()
         shot("61_폰_체험_홈")
         rule.onNodeWithTag("trial_service").performScrollTo().performClick()
         repeat(40) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(500)); rule.waitForIdle() }

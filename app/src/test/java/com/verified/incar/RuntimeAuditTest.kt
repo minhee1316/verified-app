@@ -43,12 +43,18 @@ class RuntimeAuditTest {
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
     private fun notice(title: String) = listOf(Effect.Notify("차주 폰", title, "본문", Level.INFO))
 
-    @Test fun recoveredValet_notifiesOnlyOnce() {
+    @Test fun recoveredValet_doesNotCompleteOrNotifyAcrossRestarts() {
+        // 예시 GPS가 자동 주입되는 debug 체험 대신, 실제 신호를 기다리는 제출용 환경을 사용한다.
+        app.applicationInfo.flags = app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
         Store(app).saveValet(ValetState(phase = ValetPhase.PRELIM, prelimAtMs = 1, moved = true))
-        rt()
+        val first = rt()
+        first.close()
         val r = rt()
-        assertEquals("다시 켜도 같은 완료 알림을 또 보내지 않음", 1, r.ui.value.notices.count { it.title == "① 대리 주차 완료" })
-        assertEquals(ValetPhase.COMPLETE, Store(app).loadValet().phase)
+        assertTrue(r.ui.value.notices.none { it.title == "① 대리 주차 완료" })
+        assertEquals(ValetPhase.PRELIM, Store(app).loadValet().phase)
+        assertNotNull(Store(app).loadValet().verificationPending)
+        assertTrue(Store(app).loadHistory().isEmpty())
+        r.close()
     }
 
     @Test fun wipe_doesNotResaveOldNotices() {

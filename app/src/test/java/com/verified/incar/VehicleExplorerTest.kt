@@ -42,9 +42,9 @@ class VehicleExplorerTest {
         vm.settings { it.copy(personas = Persona.entries.toSet(), carModel = CarModel.GRANDEUR) }
         rule.setContent { MaterialTheme { App(vm) } }
         rule.waitForIdle()
-        rule.onNodeWithTag("nav_MYCAR").performClick()
+        rule.onNodeWithTag("nav_CONTROL").performClick()
         rule.waitForIdle()
-        tap("mycar_vehicle_view")
+        tap("control_vehicle_view")
     }
 
     private fun tap(tag: String) {
@@ -70,17 +70,9 @@ class VehicleExplorerTest {
         tap("vehicle_photo_next")
         rule.onNodeWithTag("vehicle_photo_caption").assertTextContains("앞부분 디테일", substring = true)
         tap("explorer_door_FRONT_RIGHT")
-        rule.onNodeWithTag("explorer_climate").assertExists()
+        // 실내 온도·열선은 제어 화면 한 곳에서만 바꾼다
+        rule.onNodeWithTag("explorer_to_control").assertExists()
         shot("70_폰_차량360_실내", "vehicle_scene")
-        tap("explorer_heat")
-        assertTrue(vm.ui.value.signals.hvacPowerOn)
-        assertFalse(vm.ui.value.signals.acOn)
-        assertEquals(25f, vm.ui.value.signals.hvacTempC)
-        tap("explorer_temp_up")
-        assertEquals(26f, vm.ui.value.signals.hvacTempC)
-        tap("explorer_fan_up")
-        assertEquals(4, vm.ui.value.signals.fanSpeed)
-        shot("71_폰_차량360_공조", "explorer_climate")
         tap("explorer_example_belt")
         tap("explorer_example_lock")
         assertEquals(false, vm.ui.value.signals.details.belted[SeatPart.REAR_RIGHT]?.value)
@@ -100,7 +92,7 @@ class VehicleExplorerTest {
         rule.onNodeWithTag("explorer_seat_DRIVER").assertExists()
         assertEquals(null, vm.ui.value.signals.details.occupied[SeatPart.DRIVER])
         tap("explorer_interior")
-        rule.onNodeWithTag("explorer_heat").performScrollTo().assertIsNotEnabled()
+        rule.onNodeWithTag("explorer_to_control").assertExists()
         val before = vm.ui.value.signals
         vm.setCabin(CabinSetting.from(before).copy(temperatureC = 30f))
         assertEquals(before, vm.ui.value.signals)
@@ -139,7 +131,7 @@ class VehicleExplorerTest {
         rule.waitForIdle()
         rule.onNodeWithTag("explorer_focus").assertTextContains("뒷좌석 오른쪽", substring = true)
         rule.onNodeWithTag("explorer_focus").assertTextContains("벨트 미체결", substring = true)
-        rule.onNodeWithTag("explorer_climate").assertExists()
+        rule.onNodeWithTag("explorer_to_control").assertExists()
         shot("76_폰_홈경고_뒷좌석벨트", "explorer_focus")
         vm.close()
     }

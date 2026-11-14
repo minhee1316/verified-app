@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- 확인됨 일러스트: 네이비 두 톤, 64×64 -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="96dp" android:height="96dp" android:viewportWidth="64" android:viewportHeight="64">
-    <path android:fillColor="#C9D8EA" android:pathData="M20,59 a12,3 0 1,0 24,0 a12,3 0 1,0 -24,0" />
-    <path android:fillColor="#002C5F" android:pathData="M32,5 C20.4,5 12,13.9 12,25 C12,39 32,57 32,57 C32,57 52,39 52,25 C52,13.9 43.6,5 32,5 Z" />
-    <path android:fillColor="#E3ECF6" android:pathData="M21,25 a11,11 0 1,0 22,0 a11,11 0 1,0 -22,0" />
-    <path android:fillColor="#00000000" android:strokeColor="#002C5F" android:strokeWidth="3" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M29,19 L29,31 M29,19 L34,19 A4,4 0 0,1 34,27 L29,27" />
-</vector>

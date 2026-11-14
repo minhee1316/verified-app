@@ -84,7 +84,10 @@ fun VehicleExplorer(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit, focus
                 }
             }
             if (model != null) {
-                if (inside) CabinControls(vm, u)
+                if (inside) Card(Modifier.fillMaxWidth().testTag("explorer_to_control"), padding = 16.dp) {
+                    Text("온도·열선은 제어 화면에서 바꿔요", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = C.ink)
+                    BigButton("제어 › 실내 열기", Modifier.fillMaxWidth(), BtnStyle.OUTLINE) { go("CONTROL") }
+                }
                 Card(Modifier.fillMaxWidth(), padding = 18.dp) {
                     Text("문과 잠금", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = C.ink)
                     Text(if (example) "예시 차량 신호" else if (u.carConnected) "차량에서 받은 위치별 신호" else "차량 미연결 · 상태 확인 불가",
@@ -143,53 +146,6 @@ fun VehicleExplorer(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit, focus
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CabinControls(vm: VerifiedRuntime, u: UiState) {
-    val s = u.signals
-    val canChange = u.simAllowed && !u.carConnected && !s.uxRestricted && u.settings.carModel?.controllable == true
-    val example = u.simAllowed && !u.carConnected
-    val setting = CabinSetting.from(s)
-    fun value(signal: String, text: String) = if (example || (u.carConnected && signal in u.liveSignals && signal in s.seenAt)) text else "확인 불가"
-    Card(Modifier.fillMaxWidth().testTag("explorer_climate"), padding = 18.dp) {
-        Text("실내 공조", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = C.ink)
-        Text(if (example) "체험 차량에 반영돼요." else "실차 공조 조작은 연결 준비 중이에요.", fontSize = 16.sp, color = C.sub)
-        KeyValue("공조 전원", value("hvacPower", if (s.hvacPowerOn) "켜짐" else "꺼짐"))
-        KeyValue("설정 온도", value("hvacTemp", "${s.hvacTempC.toInt()}℃"))
-        Wrap {
-            Chip("시원하게", null, Modifier.testTag("explorer_cool"), enabled = canChange) {
-                vm.setCabin(setting.copy(power = true, cooling = true, temperatureC = 20f, fanSpeed = 3))
-            }
-            Chip("따뜻하게", null, Modifier.testTag("explorer_heat"), enabled = canChange) {
-                vm.setCabin(setting.copy(power = true, cooling = false, temperatureC = 25f, fanSpeed = 3))
-            }
-            Chip("공조 끄기", null, enabled = canChange) { vm.setCabin(setting.copy(power = false, fanSpeed = 0)) }
-        }
-        Wrap {
-            Chip("온도 −", null, Modifier.testTag("explorer_temp_down"), enabled = canChange) { vm.setCabin(setting.copy(temperatureC = s.hvacTempC - 1)) }
-            Chip("온도 ＋", null, Modifier.testTag("explorer_temp_up"), enabled = canChange) { vm.setCabin(setting.copy(temperatureC = s.hvacTempC + 1)) }
-        }
-        KeyValue("바람 세기", value("fanSpeed", if (s.fanSpeed == 0) "꺼짐" else "${s.fanSpeed}단"))
-        Wrap {
-            Chip("바람 −", null, enabled = canChange) { vm.setCabin(setting.copy(fanSpeed = s.fanSpeed - 1)) }
-            Chip("바람 ＋", null, Modifier.testTag("explorer_fan_up"), enabled = canChange) { vm.setCabin(setting.copy(fanSpeed = s.fanSpeed + 1)) }
-        }
-        Wrap {
-            Chip("에어컨 A/C · ${value("ac", if (s.acOn) "켜짐" else "꺼짐")}", example && s.acOn, enabled = canChange) {
-                vm.setCabin(setting.copy(cooling = !s.acOn))
-            }
-            Chip("내기순환 · ${value("recirc", if (s.recircOn) "켜짐" else "꺼짐")}", example && s.recircOn, enabled = canChange) {
-                vm.setCabin(setting.copy(recirculate = !s.recircOn))
-            }
-            Chip("앞유리 성에 제거", example && s.defrosterOn, enabled = canChange) {
-                vm.setCabin(setting.copy(defrost = !s.defrosterOn))
-            }
-            Chip("운전석 열선 · ${value("seatHeat", "${s.seatHeatDriver}단")}", example && s.seatHeatDriver > 0, enabled = canChange) {
-                vm.setCabin(setting.copy(driverHeat = (s.seatHeatDriver + 1) % 4))
             }
         }
     }

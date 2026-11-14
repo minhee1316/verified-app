@@ -110,13 +110,13 @@ class VerifiedRuntime internal constructor(
     private var wasHandedOver = false
     /** PIN을 기다리는 차주 전용 조작. 이것이 있으면 화면이 PIN 패드를 띄운다. */
     val ownerRequest = MutableStateFlow<(() -> Unit)?>(null)
-    // 개발(debug)·시연(demo) 빌드는 실차에서도 시뮬레이터를 연다. demo는 제출본처럼 비디버그라 BuildConfig로 구분한다
-    private val debuggable = BuildConfig.DEMO || (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    // 개발(debug) 빌드는 실차에서도 시뮬레이터를 연다
+    private val debuggable = (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
     /** 실차에 연결된 제출용 빌드에서는 시뮬레이터가 실제 신호를 덮어쓰지 못한다(예: 대리기사가 '집 도착·P단'을 꾸미는 것). */
     val simAllowed get() = debuggable || trial
 
-    /** 체험을 고를 수 있는지: 차에 연결되지 않은 휴대폰의 제출용 빌드. */
-    private val trialAvailable get() = !automotive && !debuggable && !trial && !car.connected &&
+    /** 체험을 고를 수 있는지: 차 신호에 연결되지 않은 휴대폰·차 화면(개발 빌드 제외). */
+    private val trialAvailable get() = !debuggable && !trial && !car.connected &&
         !engine.state.valet.active && !engine.state.lend.active
 
     /** 고른 차종으로 체험 저장소를 새로 만든다. 호출한 화면이 앱을 다시 시작해야 체험 모드로 열린다. */
@@ -397,10 +397,12 @@ class VerifiedRuntime internal constructor(
             if (cm != null) netOnline = cm.activeNetwork != null
         }
         scope.launch { deliverPhoneNotices() }
-        val recovered = engine.recoverValet(store.loadValet())
+        val savedValet = store.loadValet()
+        // 부팅 추정 시각은 복구 안내에만 사용한다. 재부팅 자체를 주차 완료 근거로 쓰지 않는다.
+        val bootAtMs = System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()
+        val recovered = engine.recoverValet(savedValet, rebooted = (savedValet.prelimAtMs ?: 0) < bootAtMs)
         handle(recovered)
-        // 복구한 완료를 알림 뒤에 저장해, 다시 켤 때 또 알리지 않는다(사이에 꺼져도 알림은 남게)
-        if (recovered.isNotEmpty()) { store.saveValet(engine.state.valet); store.saveHistory(engine.state.history, now = true) }
+        if (engine.state.valet != savedValet) store.saveValet(engine.state.valet)
         scope.launch { signals.collect { step() } }
         if (simTicker) scope.launch {
             var lastScheduleMs = 0L

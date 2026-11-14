@@ -14,7 +14,7 @@ class HomeVerdictTest {
 
     @Test fun infoOnly_isAllVerified_andSaysSimulator() {
         val v = MyHyundai.verdict(listOf(ok, info), null, carConnected = false, simAllowed = true, unread = 0)
-        assertEquals("모두 확인됨", v.word)
+        assertEquals("예시 · 이상 없음", v.word)
         assertEquals(Level.OK, v.level)
         assertNull(v.tab)
         assertEquals("차량 연결 전 · 예시 값 기준", v.basis)

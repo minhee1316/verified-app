@@ -3,6 +3,8 @@
 
     <!-- 차량 신호 읽기 (AAOS). 권한이 없는 신호는 앱이 '미지원'으로 보고 대체 판정한다 -->
     <uses-permission android:name="android.car.permission.CAR_POWERTRAIN" />
+    <!-- 원격 시동 진동(설정에서 끌 수 있음) -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.car.permission.CAR_SPEED" />
     <uses-permission android:name="android.car.permission.CAR_INFO" />
     <uses-permission android:name="android.car.permission.CAR_ENERGY" />

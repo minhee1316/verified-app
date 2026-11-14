@@ -270,7 +270,8 @@ object MyHyundai {
             !simAllowed && !carConnected -> HomeVerdict("차량 미연결", "", Level.INFO, null, basis)
             !simAllowed && lastReadAtMs == null -> HomeVerdict("확인 중", "", Level.INFO, null, basis)
             !simAllowed && unread > 0 -> HomeVerdict("일부 확인 불가", "", Level.INFO, null, basis)
-            else -> HomeVerdict("모두 확인됨", "지금 챙길 것이 없어요", Level.OK, null, basis)
+            simAllowed -> HomeVerdict("예시 · 이상 없음", "지금 챙길 것이 없어요", Level.OK, null, basis)
+            else -> HomeVerdict("읽은 항목 모두 정상", "지금 챙길 것이 없어요", Level.OK, null, basis)
         }
     }
 

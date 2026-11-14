@@ -18,7 +18,6 @@ import com.verified.incar.ui.KeyMH
 import com.verified.incar.ui.MyPageMH
 import com.verified.incar.ui.ShopMH
 import com.verified.incar.ui.VerifiedMH
-import com.verified.incar.ui.MyCarMH
 import com.verified.incar.ui.Root
 import com.verified.incar.ui.ServiceMH
 import com.verified.incar.ui.WalletMH
@@ -135,16 +134,16 @@ class MainActivity : ComponentActivity() {
 
 /** 하위 화면 제목 (가운데 정렬 앱바). */
 private fun titleOf(id: String): String = if (com.verified.incar.core.VehicleFocus.fromRoute(id) != null) "차량 둘러보기" else Module.entries.firstOrNull { it.name == id }?.title ?: when (id) {
-    "HOME" -> "확인됨"; "SHOP" -> "샵"; "CONTROL" -> "차량 제어"; "MYCAR" -> "내 차"; "VERIFIED" -> "기능"
-    "CARLIFE" -> "카라이프"; "WALLET" -> "월렛"; "MYPAGE" -> "마이페이지"; "SERVICE" -> "차량 관리"; "INSIGHT" -> "드라이빙 인사이트"; "KEY" -> "디지털 키"
+    "HOME" -> "확인됨"; "SHOP" -> "샵"; "CONTROL" -> "차량 제어"; "VERIFIED" -> "기능"
+    "CARLIFE" -> "카라이프"; "WALLET" -> "월렛"; "MYPAGE" -> "더보기"; "HISTORY" -> "기록"; "SERVICE" -> "차량 관리"; "INSIGHT" -> "드라이빙 인사이트"; "KEY" -> "디지털 키"
     "CAR_SETUP" -> "차량 등록"
     "VEHICLE_VIEW" -> "차량 둘러보기"
     "HAND_SERVICE" -> "정비 맡기기"
     "HAND_LEND" -> "차 빌려주기"
     "PHONE_LINK" -> "차주 휴대폰 알림"
     "TRIAL" -> "예시 차량 체험"
-    "EV_ROUTE" -> "전기차 경로"; "VALET_WATCH" -> "발레 감시"; "RADIO_DIAG" -> "무선 연결 진단"; "CAR_3D" -> "3D로 둘러보기"
-    "NOTICE" -> "보낸 알림"; "SETTINGS" -> "설정"; "SEARCH" -> "검색"; "HISTORY" -> "맡김 이력서"; else -> id
+    "EV_ROUTE" -> "전기차 경로"; "VALET_WATCH" -> "발레 감시"; "RADIO_DIAG" -> "무선 연결 진단"
+    "NOTICE" -> "보낸 알림"; "SETTINGS" -> "설정"; "SEARCH" -> "검색"; else -> id
 }
 
 /** 출발지·도착지·알림·정비 이력처럼 차주의 생활이 드러나는 화면. */
@@ -155,6 +154,8 @@ private fun needsOwner(id: String, handedOver: Boolean) =
 
 /** 켜져 있어야 엔진이 판정하는 기능(VerdictEngine.update의 on() 검사와 같게 유지). */
 private val JUDGED = setOf(Module.DRIVER, Module.TRIP, Module.SCHOOL, Module.CHAUFFEUR, Module.TRUNK)
+
+/** 포인트 색을 켜는 하단 탭(내 차·제어). */
 
 @Composable
 fun App(vm: VerifiedRuntime) {
@@ -180,7 +181,7 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
     fun navigate(id: String, rootTab: Boolean = false) {
         // 다른 화면으로 가면 기다리던 차주 조작은 버린다(나중에 차주가 PIN을 넣었을 때 엉뚱한 조작이 실행되지 않게)
         vm.cancelOwnerRequest()
-        val target = when (id) { "MH_CAR" -> "MYCAR"; "MH_LIFE" -> "CARLIFE"; else -> id }
+        val target = when (id) { "MH_CAR" -> "SERVICE"; "MH_LIFE" -> "CARLIFE"; else -> id }
         val handedOver = u.engine.valet.active || u.engine.lend.active
         val open = {
             // 꺼진 판정 기능을 열면 켠다(판정이 안 도는데 '자동으로 시작해요'로 보이지 않게). 차를 넘긴 동안에는 차주 확인 뒤에만
@@ -221,7 +222,7 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
     }
     C.dark = C.forceDark ?: isSystemInDarkTheme()
     // 시뮬레이터는 개발(debug) 빌드에서만 버튼으로 보이고, 제출용 빌드에서는 로고를 길게 눌러야 열린다
-    val debuggable = BuildConfig.DEMO || (LocalContext.current.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    val debuggable = (LocalContext.current.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     val nav by vm.navigate.collectAsState()
     LaunchedEffect(nav) { nav?.let { go(it); vm.navigate.value = null } }
     // ⑩ 출발 준비는 앱 제어 지원 차에서만 보여 준다 (미등록이면 등록 안내를 위해 보여 준다). ⑧은 항상
@@ -267,7 +268,6 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
                         Module.COMFORT.name -> ComfortScreen(vm, u)
                         "SHOP" -> ShopMH(vm, u, go)
                         "CONTROL" -> ControlMH(vm, u, go)
-                        "MYCAR" -> MyCarMH(vm, u, go)
                         "VEHICLE_VIEW" -> com.verified.incar.ui.VehicleExplorer(vm, u, go)
                         "VERIFIED" -> VerifiedMH(u, modules, go)
                         "MYPAGE" -> MyPageMH(u, modules, go)
@@ -284,13 +284,12 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
                         "CAR_SETUP" -> com.verified.incar.ui.Card(Modifier.fillMaxWidth().padding(if (phone) 16.dp else 28.dp)) {
                             com.verified.incar.ui.CarModelPicker(vm, u)
                         }
-                        "HISTORY" -> com.verified.incar.ui.HistoryScreen(vm, u)
-                        "SEARCH" -> com.verified.incar.ui.SearchMH(go, showMock = u.simAllowed)
+                        "HISTORY" -> com.verified.incar.ui.HistoryScreen(vm, u, go)
+                        "SEARCH" -> com.verified.incar.ui.SearchMH(go, showMock = u.simAllowed && !u.trial)
                         "TRIAL" -> com.verified.incar.ui.TrialScreen(vm, u)
                         "EV_ROUTE" -> com.verified.incar.ui.EvRouteScreen()
                         "VALET_WATCH" -> com.verified.incar.ui.ValetWatchScreen()
                         "RADIO_DIAG" -> com.verified.incar.ui.RadioDiagScreen()
-                        "CAR_3D" -> com.verified.incar.ui.Car3DScreen(u)
                         else -> HomeMH(vm, u, (if (comfortOn) listOf(Module.COMFORT) else emptyList()) + modules.filter { it in u.settings.modules && it != Module.COMFORT }, go)
                     }
                 }
@@ -314,7 +313,7 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
                 Icon(Icons.Outlined.Close, "안내 닫기", tint = C.sub)
             }
         }
-        if (!restricted && u.settings.onboarded) BottomNav(selectedRoot, showShop = u.simAllowed) { navigate(it, rootTab = true) }
+        if (!restricted && u.settings.onboarded) BottomNav(selectedRoot) { navigate(it, rootTab = true) }
     }
     }
 }
@@ -329,7 +328,7 @@ private fun AppBar(
     val compact = com.verified.incar.ui.isCompact()
     val restricted = u.signals.uxRestricted
     Row(
-        Modifier.fillMaxWidth().background(C.card).padding(horizontal = if (compact) 12.dp else 24.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().background(C.bg).padding(horizontal = if (compact) 12.dp else 24.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (canBack) androidx.compose.material3.IconButton(onClick = back, modifier = Modifier.size(48.dp)) {
@@ -362,9 +361,6 @@ private fun AppBar(
         } else if (u.settings.onboarded) {
             androidx.compose.material3.IconButton(onClick = openNotice, enabled = !restricted, modifier = Modifier.size(48.dp).testTag("nav_NOTICE")) {
                 Icon(Icons.Outlined.Notifications, "알림", tint = if (restricted) C.sub else C.ink)
-            }
-            androidx.compose.material3.IconButton(onClick = openMyPage, enabled = !restricted, modifier = Modifier.size(48.dp).testTag("nav_MENU")) {
-                Icon(Icons.Outlined.Person, "마이페이지", tint = if (restricted) C.sub else C.ink)
             }
         }
     }

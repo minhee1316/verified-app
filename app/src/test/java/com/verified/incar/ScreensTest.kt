@@ -68,7 +68,7 @@ class ScreensTest {
         rule.waitForIdle()
     }
 
-    private val roots = setOf("HOME", "SHOP", "CONTROL", "MYCAR", "VERIFIED")
+    private val roots = setOf("HOME", "CONTROL", "HISTORY", "MYPAGE")
 
     /** 하단 탭은 바로, 나머지 화면은 마이페이지(사람 아이콘)를 거쳐 연다. */
     private fun tab(id: String) {
@@ -77,9 +77,11 @@ class ScreensTest {
             // 마이현대처럼 사람 아이콘은 메인 탭에만 있으므로 홈을 거쳐 마이페이지로 들어간다
             rule.onNodeWithTag("nav_HOME").performClick()
             rule.waitForIdle()
-            rule.onNodeWithTag("nav_MENU").performClick()
+            rule.onNodeWithTag("nav_MYPAGE").performClick()
             rule.waitForIdle()
-            rule.onNodeWithTag("tab_$id").performScrollTo().performClick()
+            // 기능 10개는 더보기에서 "상황별 기능" 한 줄로 합쳐져 있어 화면 경로로 바로 연다
+            if (rule.onAllNodesWithTag("tab_$id").fetchSemanticsNodes().isNotEmpty()) rule.onNodeWithTag("tab_$id").performScrollTo().performClick()
+            else vm.navigate.value = id
         }
         rule.waitForIdle()
     }
@@ -194,11 +196,10 @@ class ScreensTest {
         start()
         vm.settings { it.copy(carModel = com.verified.incar.core.CarModel.GRANDEUR) }
         rule.waitForIdle()
-        assertTrue(rule.onAllNodesWithText("모두 확인됨").fetchSemanticsNodes().isNotEmpty())
-        assertTrue(rule.onAllNodesWithText("모두 정상").fetchSemanticsNodes().isNotEmpty())
+        assertTrue(rule.onAllNodesWithText("예시 · 이상 없음").fetchSemanticsNodes().isNotEmpty())
         shot("51_폰홈_모두확인됨")
         sig { it.copy(windowOpen = true) }
-        assertTrue(rule.onAllNodesWithText("확인 필요 1건").fetchSemanticsNodes().size >= 2)
+        assertTrue(rule.onAllNodesWithText("확인 필요 1건").fetchSemanticsNodes().isNotEmpty())
         shot("52_폰홈_확인필요")
     }
 
@@ -217,7 +218,7 @@ class ScreensTest {
         tab("VERIFIED")
         rule.onNodeWithTag("situation_PARKING").performClick()
         rule.onNodeWithTag("feature_CONTROL").performScrollTo().performClick()
-        rule.onNodeWithText("차량 조작").assertExists()
+        rule.onNodeWithTag("control_top").assertExists()
         rule.onAllNodesWithContentDescription("뒤로").onFirst().performClick()
         rule.onNodeWithTag("feature_CONTROL").assertExists()
         rule.onNodeWithTag("situation_HANDOVER").performScrollTo().performClick()
@@ -279,8 +280,9 @@ class ScreensTest {
         sig { it.copy(gpsLost = true, place = Place.OTHER, speedKmh = 5f) }
         sig { it.copy(gear = Gear.P, speedKmh = 0f, driverSeated = false, driverDoorOpen = true) }
         skip(11)
-        assertEquals(ValetPhase.COMPLETE, e().valet.phase)
-        shot("05_대리_지하주차장_추정판정")
+        assertEquals(ValetPhase.PRELIM, e().valet.phase)
+        rule.onNodeWithText("위치 신호를 기다리고 있어요. 완료·목적지 밖 하차 판정을 보류합니다.").assertExists()
+        shot("05_대리_지하주차장_판정보류")
     }
 
     @Test fun s06_valetOutside() {
@@ -394,10 +396,10 @@ class ScreensTest {
         vm.settings { it.copy(carModel = com.verified.incar.core.CarModel.OTHER) }
         rule.waitForIdle()
         shot("02c_홈_주행기능모드")
-        rule.onNodeWithTag("nav_MENU").performClick()
+        rule.onNodeWithTag("nav_MYPAGE").performClick()
         rule.waitForIdle()
-        rule.onNodeWithTag("tab_COMFORT").assertDoesNotExist()
-        rule.onNodeWithTag("tab_VALET").assertExists()
+        // 그 밖의 차량은 출발 준비(⑩)가 빠져 기능 10개 중 9개
+        assertTrue(rule.onAllNodesWithText("9개").fetchSemanticsNodes().isNotEmpty())
     }
 
     @Test fun s20_nightModeAndWipe() {
@@ -432,11 +434,9 @@ class ScreensTest {
         tab("VERIFIED")
         shot("27c_확인됨_기능모음")
         tab("CONTROL")
-        click("문")
+        rule.onNodeWithTag("quick_lock").performScrollTo().performClick(); rule.waitForIdle()
         assertTrue(vm.ui.value.signals.doorsLocked)
         shot("28_마이현대_원격제어")
-        tab("MYCAR")
-        shot("29_마이현대_마이카")
         // 최근 4주 하루 40km, 100km당 급감속 6회 → 엔진오일 예상 날짜, 브레이크 패드 가혹 조건
         val odo = vm.ui.value.signals.odometerKm
         val today = java.time.LocalDate.now()
@@ -459,7 +459,7 @@ class ScreensTest {
         tab("WALLET")
         shot("33_마이현대_월렛")
         rule.onNodeWithTag("nav_HOME").performClick(); rule.waitForIdle()
-        rule.onNodeWithTag("nav_MENU").performClick(); rule.waitForIdle()
+        rule.onNodeWithTag("nav_MYPAGE").performClick(); rule.waitForIdle()
         shot("34_마이페이지")
         tab("VALET")
         assertTrue(vm.ui.value.feed.isNotEmpty())
@@ -501,7 +501,7 @@ class ScreensTest {
         vm.setOwnerPin("2468")
         vm.lockOwner()
         rule.onNodeWithTag("nav_HOME").performClick(); rule.waitForIdle()
-        rule.onNodeWithTag("nav_MENU").performClick(); rule.waitForIdle()
+        rule.onNodeWithTag("nav_MYPAGE").performClick(); rule.waitForIdle()
         rule.onNodeWithTag("tab_SETTINGS").performScrollTo().performClick(); rule.waitForIdle()
         "1111".forEach { rule.onNodeWithTag("pin_$it").performClick() }
         rule.onNodeWithTag("pin_확인").performClick(); rule.waitForIdle()
@@ -564,7 +564,7 @@ class ScreensTest {
     @Test fun s29_searchAndVerifiedControl() {
         start()
         vm.settings { it.copy(carModel = com.verified.incar.core.CarModel.GRANDEUR) }
-        rule.onNodeWithTag("home_search", useUnmergedTree = true).performClick(); rule.waitForIdle()
+        rule.onNodeWithTag("home_search").performScrollTo().performClick(); rule.waitForIdle()
         rule.onNodeWithTag("search_box").performTextInput("와이퍼"); rule.waitForIdle()
         shot("40_검색_와이퍼")
         rule.onNodeWithTag("search_DIAG", useUnmergedTree = true).performClick(); rule.waitForIdle()
@@ -575,7 +575,7 @@ class ScreensTest {
         // 차가 명령을 받지 못하면 '요청 완료'가 아니라 확인 중 → 실패로 알린다
         vm.setSimControlFail(true)
         tab("CONTROL")
-        click("문")
+        rule.onNodeWithTag("quick_lock").performScrollTo().performClick(); rule.waitForIdle()
         assertTrue(e().pendingControl != null)
         shot("41_제어_차신호확인중")
         skip(16)

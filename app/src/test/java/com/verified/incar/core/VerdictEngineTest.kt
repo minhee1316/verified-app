@@ -32,21 +32,33 @@ class VerdictEngineTest {
         assertTrue(fx.any { it is Effect.Notify && it.level == Level.OK })
     }
 
-    @Test fun valet_prelimSavedThenPowerCut_recoversAsComplete() {
+    @Test fun valet_prelimSavedThenPowerCut_waitsForFreshSignals() {
         val e = VerdictEngine()
-        e.recoverValet(ValetState(phase = ValetPhase.PRELIM, prelimAtMs = 1))
-        assertEquals(ValetPhase.COMPLETE, e.state.valet.phase)
+        val fx = e.recoverValet(ValetState(phase = ValetPhase.PRELIM, prelimAtMs = 1))
+        assertEquals(ValetPhase.PRELIM, e.state.valet.phase)
+        assertNull(e.state.valet.prelimAtMs)
+        assertTrue(e.state.valet.verificationPending != null)
+        assertTrue(e.state.history.isEmpty())
+        assertTrue(fx.isEmpty())
     }
 
-    @Test fun valet_undergroundGpsLost_usesLastPlace() {
+    @Test fun valet_prelimSavedThenAppRestartOnly_keepsWatching() {
+        val e = VerdictEngine()
+        val fx = e.recoverValet(ValetState(phase = ValetPhase.PRELIM, prelimAtMs = 1), rebooted = false)
+        assertEquals(ValetPhase.PRELIM, e.state.valet.phase)
+        assertTrue(fx.isEmpty())
+    }
+
+    @Test fun valet_undergroundGpsLost_defersVerdict() {
         val e = engine(Persona.NIGHT_OUT)
         startedValet(e, driving)
         e.update(driving.copy(place = Place.HOME), 1_000)
         val garage = driving.copy(gear = Gear.P, speedKmh = 0f, place = Place.OTHER, gpsLost = true, driverSeated = false, driverDoorOpen = true)
         e.update(garage, 2_000)
         e.update(garage, 13_000)
-        assertEquals(ValetPhase.COMPLETE, e.state.valet.phase)
-        assertTrue(e.state.valet.placeEstimated)
+        assertEquals(ValetPhase.PRELIM, e.state.valet.phase)
+        assertTrue(e.state.valet.verificationPending != null)
+        assertTrue(e.state.history.isEmpty())
     }
 
     @Test fun valet_leftOutsideHome_warnsOwnerNotToDrive() {
@@ -132,12 +144,12 @@ class VerdictEngineTest {
         assertEquals(SchoolPhase.FAIL, e.state.school.phase)
     }
 
-    @Test fun chauffeur_harshBrakeCostsScoreAndSpeaks() {
+    @Test fun chauffeur_harshBrakeCountedAndSpoken() {
         val e = engine(Persona.PARENT_CARE)
         val ride = Signals(row2Seated = true, row2Belt = true, row2Reclined = true, gear = Gear.D, speedKmh = 50f)
         e.update(ride, 0)
         val fx = e.update(ride.copy(speedKmh = 35f), 1_000)
-        assertEquals(94, e.state.chauffeur.score)
+        assertEquals(1, e.state.chauffeur.brakes)
         assertTrue(fx.any { it is Effect.Speak })
     }
 

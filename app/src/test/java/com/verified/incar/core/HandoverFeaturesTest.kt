@@ -326,13 +326,14 @@ class HandoverStoreTest {
 
     @Test fun newFields_roundTrip_andOldDataStillLoads() {
         val check = CarCheck(1, 100.0, null, setOf("엔진"), true, null, false, null, true, false)
-        val v = ValetState(phase = ValetPhase.DRIVING, moved = true, checkIn = check, prep = setOf(PrepItem.VALET_MODE), naviEtaMs = 99, naviOffWarned = true)
+        val v = ValetState(phase = ValetPhase.DRIVING, moved = true, checkIn = check, prep = setOf(PrepItem.VALET_MODE), naviEtaMs = 99, naviOffWarned = true, verificationPending = "위치 신호 대기")
         Store(app).saveValet(v)
         val lv = Store(app).loadValet()
         assertEquals(check, lv.checkIn)
         assertEquals(setOf(PrepItem.VALET_MODE), lv.prep)
         assertEquals(99L, lv.naviEtaMs)
         assertTrue(lv.naviOffWarned)
+        assertEquals("위치 신호 대기", lv.verificationPending)
 
         val l = LendState(active = true, kind = HandKind.SERVICE, checkIn = check, prep = setOf(PrepItem.CAM_SAVE), startLat = 37.5, startLon = 127.0, roamWarned = true, parkedSocUsed = 4)
         Store(app).saveSession(TripState(), l)

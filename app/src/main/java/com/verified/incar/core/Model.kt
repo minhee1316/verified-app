@@ -236,6 +236,10 @@ data class Settings(
     val bookings: List<Booking> = emptyList(),
     val sharedKeys: List<SharedKey> = emptyList(),
     val enforcementAlert: Boolean = true,
+    /** 원격 시동(미리 공조)이 켜질 때 휴대폰 진동. 소리는 내지 않는다. */
+    val startHaptic: Boolean = true,
+    /** 홈·제어 빠른 제어 순서(길게 눌러 바꿈). 모르는 값은 버리고 빠진 값은 뒤에 붙인다. */
+    val quickOrder: List<String> = QUICK_DEFAULT,
     /** 블루멤버스 보유 포인트(연동 목업). ⑤ 스쿨존 적립분은 따로 더한다. */
     val memberPoints: Int = 0,
     /** 차주 PIN의 PBKDF2 해시와 소금. PIN 자체는 저장하지 않는다. */
@@ -270,3 +274,20 @@ sealed interface Effect {
 }
 
 data class AmbientCue(val left: Level?, val right: Level?, val note: String)
+
+/** 빠른 제어 기본 순서: 잠금 · 공조 · 비상등 · 경적. */
+val QUICK_DEFAULT = listOf("LOCK", "AC", "HAZARD", "HORN")
+
+/** 저장된 순서를 정리한다(중복·모르는 값 제거, 빠진 항목은 기본 순서대로 뒤에). */
+fun normalizeQuickOrder(saved: List<String>): List<String> =
+    (saved.filter { it in QUICK_DEFAULT }.distinct() + QUICK_DEFAULT).distinct()
+
+/** [key]를 한 칸 앞(-1)이나 뒤(+1)로 옮긴다. 끝이면 그대로. */
+fun moveQuick(order: List<String>, key: String, by: Int): List<String> {
+    val list = normalizeQuickOrder(order).toMutableList()
+    val i = list.indexOf(key)
+    val j = i + by
+    if (i < 0 || j !in list.indices) return list
+    list[i] = list[j]; list[j] = key
+    return list
+}

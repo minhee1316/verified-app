@@ -1,9 +1,29 @@
+# Gradle·Android Studio 빌드 결과와 캐시
 .gradle/
-.kotlin/
 build/
-local.properties
+.kotlin/
+.cxx/
+.externalNativeBuild/
+captures/
 .idea/
 *.iml
+# 이 PC의 SDK 경로(사람마다 다름)
+local.properties
+# 서명 키는 올리지 않는다
+*.jks
+*.keystore
+# 운영체제가 만드는 파일
+.DS_Store
+Thumbs.db
+desktop.ini
+# 3D 모델은 비상업·출처 미확인 라이선스라 공개 저장소에 올리지 않는다
+app/src/demo/assets/models/
+*.glb
+# 테스트가 만드는 화면 캡처(README: 저장소에는 올리지 않음)
+screenshots/
+# 제출 APK는 apk/ 폴더 하나만 올린다
 *.apk
-# 3D 모델(.glb)은 라이선스가 달라 저장소에 올리지 않는다. NOTICE.md 참고
-app/src/demo/assets/
+!apk/*.apk
+
+# 내부 작업 지침(로컬 전용)
+작업지침_AGENTS.md

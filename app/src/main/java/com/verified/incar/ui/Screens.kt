@@ -1,5 +1,8 @@
 package com.verified.incar.ui
 
+import androidx.compose.material.icons.outlined.Receipt
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.LocalParking
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -100,7 +103,7 @@ fun statusOf(m: Module, u: UiState): Pair<String, Level?> {
             SchoolPhase.SUCCESS -> Level.OK
             else -> null
         }
-        Module.CHAUFFEUR -> (if (e.chauffeur.active) "${e.chauffeur.score}점" else "시작 대기") to if (e.chauffeur.active) Level.INFO else null
+        Module.CHAUFFEUR -> (if (e.chauffeur.active) "급감속 ${e.chauffeur.brakes} · 급가속 ${e.chauffeur.accels}" else "시작 대기") to if (e.chauffeur.active) Level.INFO else null
         Module.TRUNK -> {
             val checks = exitChecks(u)
             val bad = checks.count { it.bad }
@@ -111,7 +114,7 @@ fun statusOf(m: Module, u: UiState): Pair<String, Level?> {
                 unknown > 0 -> "확인 불가 ${unknown}건" to Level.INFO
                 e.floor.confirmed != null -> "지하 ${e.floor.confirmed}층 주차" to Level.INFO
                 bad > 0 -> "하차 시 점검" to null
-                else -> "모두 확인됨" to Level.OK
+                else -> "하차 점검 정상" to Level.OK
             }
         }
         Module.DIAG -> "증상 확인" to null
@@ -416,7 +419,8 @@ private fun ValetBody(vm: VerifiedRuntime, u: UiState, phone: Boolean) {
                 val byOff = v.confirmedBy?.startsWith("시동 OFF") == true
                 val gearKnown = done || !u.unread("gear")
                 val speedKnown = done || !u.unread("speed")
-                val placeKnown = done || !u.unread("gps")
+                val placeKnown = done || (!estimated && !u.unread("gps") &&
+                    (!u.carConnected || s.seenAt["gps"]?.let { u.nowMs - it in 0..30_000L } == true))
                 val leftCar = (!u.unread("row2Occupancy") && !s.driverSeated) || (!u.unread("doors") && s.driverDoorOpen)
                 val exitKnown = done || leftCar || (!u.unread("row2Occupancy") && !u.unread("doors"))
                 CheckLine((done || s.gear == Gear.P).takeIf { gearKnown }, "P단 체결", if (gearKnown) null else "확인 불가")
@@ -448,10 +452,12 @@ private fun ValetBody(vm: VerifiedRuntime, u: UiState, phone: Boolean) {
                     Note("차주님께: 집 앞이라도 직접 운전하지 마세요. 대리 재호출이나 긴급출동을 이용하세요.", Level.DANGER)
                     BigButton("차주 승인: 여기서 종료", Modifier.fillMaxWidth(), BtnStyle.SOFT_DANGER) { vm.ownerOnly { vm.act { _, _ -> ownerCloseValet() } } }
                 }
-                else -> v.prelimAtMs?.let { Note("P단 진입 즉시 1차 완료 저장 (${VerdictEngine.hhmm(it)}) · 시동을 바로 꺼도 완료로 확정돼요", Level.OK) }
+                else -> if (v.verificationPending != null) Note(v.verificationPending, Level.INFO)
+                    else v.prelimAtMs?.let { Note("완료 확인 중 · ${VerdictEngine.hhmm(it)} 집 앞 P단을 차에 저장했어요. 시동 OFF 또는 운전석 하차를 기다려요", Level.INFO) }
             }
             val returned = v.phase == ValetPhase.COMPLETE || v.phase == ValetPhase.INCOMPLETE
-            if (!returned && listOf("gear", "speed", "gps", "ignition", "doors", "row2Occupancy").any { u.unread(it) }) {
+            if (returned) ValetDelivery(u)
+            if (!returned && (v.verificationPending != null || listOf("gear", "speed", "gps", "ignition", "doors", "row2Occupancy").any { u.unread(it) })) {
                 Note("일부 차량 신호를 읽지 못했어요. 차를 실제로 돌려받았다면 차주 확인으로 기록을 마칠 수 있어요.")
                 HoldButton("차주가 직접 반납 확인", Modifier.testTag("valet_manual_return"), BtnStyle.OUTLINE) {
                     vm.ownerOnly { vm.act { sig, now -> manualValetReturn(sig, now) } }
@@ -494,11 +500,28 @@ private fun PhoneValet(vm: VerifiedRuntime, u: UiState) {
         }
         if (v.active) Card(Modifier.fillMaxWidth().testTag("valet_steps"), padding = 16.dp) {
             val step = when (v.phase) { ValetPhase.CONSENT -> 0; ValetPhase.DRIVING -> 1; ValetPhase.PRELIM -> 2; else -> 3 }
-            PhoneSteps(listOf("기사 동의", "운행", "P단 1차", "완료"), step, warnLast = v.phase == ValetPhase.INCOMPLETE)
+            PhoneSteps(listOf("기사 동의", "운행", "확인 중", "완료"), step, warnLast = v.phase == ValetPhase.INCOMPLETE)
         }
         ValetBody(vm, u, phone = true)
         if (v.phase != ValetPhase.CONSENT) PhoneProof(v.proof, "valet_proof")
     }
+}
+
+/** '차에 기록됨'과 '차주에게 전달됨'을 나눠 보여 준다. 알림 서버 접수는 휴대폰 표시까지 뜻하지 않는다. */
+@Composable
+private fun ValetDelivery(u: UiState) {
+    val savedAt = u.engine.valet.result?.timeMs ?: return
+    // 알림 목록은 최신순이고, 완료·미완료 알림은 판정과 같은 순간에 만들어진다
+    val n = u.notices.firstOrNull { it.title.startsWith("① ") || it.title.startsWith("대리 반납") }
+    val example = n?.phoneExample == true || (u.simAllowed && !u.carConnected)
+    val (phone, level) = when {
+        u.phoneTopic == null -> "차주 폰 미연결" to Level.INFO
+        n?.phoneStatus == com.verified.incar.PhoneDelivery.ACCEPTED -> "차주 폰 알림: 알림 서버 접수(휴대폰 표시는 폰에서 확인)" to Level.OK
+        n?.phoneStatus == com.verified.incar.PhoneDelivery.QUEUED -> "차주 폰 알림: 전송 대기 · 인터넷이 연결되면 다시 보내요" to Level.WARN
+        n?.phoneStatus == com.verified.incar.PhoneDelivery.FAILED -> "차주 폰 알림: 전송 실패" to Level.WARN
+        else -> "차주 폰 알림: 보내지 않음" to Level.INFO
+    }
+    Note((if (example) "예시 값 결과 · " else "") + "차에 결과 저장됨 ${VerdictEngine.hhmm(savedAt)} · $phone", level)
 }
 
 // ------------------------------------------------------------------ ② (현대3)
@@ -550,18 +573,33 @@ fun DriverScreen(vm: VerifiedRuntime, u: UiState) {
 
 // ------------------------------------------------------------------ 맡김 이력서
 @Composable
-fun HistoryScreen(vm: VerifiedRuntime, u: UiState) {
+fun HistoryScreen(vm: VerifiedRuntime, u: UiState, go: (String) -> Unit = {}) {
     val h = u.engine.history
     val r = com.verified.incar.core.MyHyundai.resume(h)
     TwoPane(
         tabs = "요약" to "기록",
         top = true,
         left = {
-            ScreenTitle("", "맡김 이력서", "대리·정비 맡김·빌려주기 때 차가 읽은 기록을 모았어요.")
-            Card(Modifier.fillMaxWidth().testTag("history_summary"), padding = 24.dp) {
-                CardHeader(null, "요약")
-                r.lines.forEach { Text("· $it", fontSize = 19.sp, lineHeight = 27.sp, color = C.ink) }
-                Note(com.verified.incar.core.MyHyundai.RESUME_NOTE)
+            Card(Modifier.fillMaxWidth().testTag("history_drive"), padding = 16.dp) {
+                val locked = u.ownerPinSet && !u.ownerUnlocked && (u.engine.valet.active || u.engine.lend.active)
+                MenuRow(androidx.compose.material.icons.Icons.Outlined.Receipt, "이번 주 주행", if (locked) "차주 확인 후" else u.thisWeek?.let { "%.1f km".format(it.km) } ?: "기록 없음") { go("INSIGHT") }
+                MenuRow(androidx.compose.material.icons.Icons.Outlined.Build, "소모품 교체 시기", u.consumables.count { it.due }.takeIf { it > 0 }?.let { "교체 시기 ${it}건" } ?: "모두 여유") { go("SERVICE") }
+                MenuRow(androidx.compose.material.icons.Icons.Outlined.LocalParking, "주차 위치", u.engine.floor.confirmed?.let { "지하 ${it}층" } ?: "기록 없음") { go("TRUNK") }
+            }
+            Card(Modifier.fillMaxWidth().testTag("history_summary"), padding = 20.dp) {
+                CardHeader(null, "맡김 요약")
+                if (h.isEmpty()) {
+                    Text("아직 맡긴 기록이 없어요. 차를 맡기면 언제·누가·얼마나 운전했는지 여기에 쌓여요.", fontSize = 17.sp, color = C.sub)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BigButton("대리", Modifier.weight(1f).testTag("history_start_valet"), BtnStyle.TONAL, fontSize = 17.sp) { go("VALET") }
+                        BigButton("정비", Modifier.weight(1f), BtnStyle.TONAL, fontSize = 17.sp) { go("HAND_SERVICE") }
+                        BigButton("빌려주기", Modifier.weight(1f), BtnStyle.TONAL, fontSize = 17.sp) { go("HAND_LEND") }
+                    }
+                } else r.lines.forEach { Text("· $it", fontSize = 18.sp, lineHeight = 26.sp, color = C.ink) }
+                var more by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+                Text(if (more) com.verified.incar.core.MyHyundai.RESUME_NOTE else "이 자료는 어디에 쓰나요? ›",
+                    Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) { more = !more }.padding(vertical = 4.dp),
+                    fontSize = 15.sp, color = C.sub)
                 BigButton("CSV로 내보내기   ⇪", Modifier.fillMaxWidth().testTag("history_export"), enabled = h.isNotEmpty(), fontSize = 19.sp) { vm.exportHistory() }
             }
             FineCheckCard(h)
@@ -587,6 +625,8 @@ fun HistoryScreen(vm: VerifiedRuntime, u: UiState) {
                         } else Pill("인수·반납 상태 기록", Level.INFO)
                     }
                     rec.changes.forEach { Text("· $it", fontSize = 16.sp, color = if (it.startsWith("확인 불가")) C.warn else C.sub) }
+                    val photos = handoverPhotoCount(androidx.compose.ui.platform.LocalContext.current, rec.startMs)
+                    if (photos > 0) Text("· 같은 각도 사진 ${photos}장 (이 기기에 저장)", fontSize = 16.sp, color = C.title)
                 }
             }
         },
@@ -613,7 +653,7 @@ fun TripScreen(vm: VerifiedRuntime, u: UiState) {
             Card(Modifier.fillMaxWidth()) {
                 Row {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("trip summary", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = C.ink)
+                        Text("운행 요약", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = C.ink)
                         Text(if (t.pending != null) "방금 끝난 운행" else "최근 운행 내역", fontSize = 17.sp, color = C.ink)
                     }
                     Text("📍", fontSize = 34.sp)
@@ -653,31 +693,31 @@ fun EscortScreen(vm: VerifiedRuntime, u: UiState) {
     val doorsClosed = !s.row2RightDoorOpen && !s.row2LeftDoorOpen
     val lit = u.engine.ambient?.right != null
     val compact = isCompact()
-    Box(Modifier.fillMaxWidth().background(C.night).padding(horizontal = hPad(36.dp), vertical = 22.dp)) { Split(if (compact) 18.dp else 32.dp, center = true, first = { cell ->
+    Box(Modifier.fillMaxWidth().padding(horizontal = hPad(36.dp), vertical = 22.dp)) { Split(if (compact) 18.dp else 32.dp, center = true, first = { cell ->
         Column(cell, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Text("뒷좌석 상태", Modifier.semantics { heading() }, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text("뒷좌석 상태", Modifier.semantics { heading() }, color = C.ink, fontSize = 26.sp, fontWeight = FontWeight.Bold)
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("뒷문 · " + u.read("doors", if (doorsClosed) "닫힘" else "열림"), color = Color.White, fontSize = 19.sp)
-                Text("탑승 · " + u.read(if (u.caps.row2Occupancy) "row2Occupancy" else "belt", if (seated) "감지됨" else "감지되지 않음"), color = Color.White, fontSize = 19.sp)
-                Text("안전벨트 · " + u.read("belt", if (s.row2Belt) "착용" else "미착용"), color = Color.White, fontSize = 19.sp)
+                Text("뒷문 · " + u.read("doors", if (doorsClosed) "닫힘" else "열림"), color = C.ink, fontSize = 19.sp)
+                Text("탑승 · " + u.read(if (u.caps.row2Occupancy) "row2Occupancy" else "belt", if (seated) "감지됨" else "감지되지 않음"), color = C.ink, fontSize = 19.sp)
+                Text("안전벨트 · " + u.read("belt", if (s.row2Belt) "착용" else "미착용"), color = C.ink, fontSize = 19.sp)
             }
-            if (e.phase != EscortPhase.OFF) Text(e.phase.label, color = if (e.phase == EscortPhase.WRONG_SIDE) Color(0xFFFF8A9B) else C.blue, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
-            u.engine.ambient?.let { Text(it.note, color = if (lit) Color(0xFF7EE2B8) else Color(0xFFFFC46B), fontSize = 17.sp) }
+            if (e.phase != EscortPhase.OFF) Text(e.phase.label, color = if (e.phase == EscortPhase.WRONG_SIDE) C.danger else C.title, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold)
+            u.engine.ambient?.let { Text(it.note, color = if (lit) C.ok else C.warn, fontSize = 17.sp) }
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.09f)).padding(16.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(C.card).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 val last = e.timeline.lastOrNull()
                 // 타임라인은 동행 기록이다. 보호자에게 실제로 가는 알림은 출발·하차 때뿐
-                Text(last?.let { "동행 기록 · " + it.text } ?: "출발·하차 시 보호자에게 알리는 기능이에요.", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                if (last != null) Text(e.timeline.takeLast(4).joinToString("  ›  ") { VerdictEngine.hhmm(it.timeMs) + " " + it.text }, color = Color(0xFFA9B4C8), fontSize = 17.sp)
-                if (Consent.GUARDIAN !in u.settings.consents) Text("보호자 동의가 꺼져 있어 알림을 보내지 않아요.", color = Color(0xFFFFC46B), fontSize = 17.sp)
+                Text(last?.let { "동행 기록 · " + it.text } ?: "출발·하차 시 보호자에게 알리는 기능이에요.", color = C.ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                if (last != null) Text(e.timeline.takeLast(4).joinToString("  ›  ") { VerdictEngine.hhmm(it.timeMs) + " " + it.text }, color = C.sub, fontSize = 17.sp)
+                if (Consent.GUARDIAN !in u.settings.consents) Text("보호자 동의가 꺼져 있어 알림을 보내지 않아요.", color = C.warn, fontSize = 17.sp)
             }
-            if (e.phase == EscortPhase.OFF) BigButton("부모님 동행 시작", Modifier.fillMaxWidth(), BtnStyle.CYAN) { vm.act { _, now -> startEscort(now); emptyList() } }
-            else BigButton(if (e.phase == EscortPhase.ALIGHTED) "확인" else "동행 끝내기", Modifier.fillMaxWidth(), BtnStyle.CYAN) { vm.act { _, _ -> stopEscort(); emptyList() } }
+            if (e.phase == EscortPhase.OFF) BigButton("부모님 동행 시작", Modifier.fillMaxWidth()) { vm.act { _, now -> startEscort(now); emptyList() } }
+            else BigButton(if (e.phase == EscortPhase.ALIGHTED) "확인" else "동행 끝내기", Modifier.fillMaxWidth()) { vm.act { _, _ -> stopEscort(); emptyList() } }
         }
     }, second = { cell ->
-        Box(cell.height(if (compact) 240.dp else 360.dp), contentAlignment = Alignment.Center) {
+        Box(cell.height(if (compact) 240.dp else 360.dp).clip(RoundedCornerShape(18.dp)).background(C.night), contentAlignment = Alignment.Center) {
             Image(painterResource(R.drawable.escort_ambient), "실내 조명", Modifier.fillMaxSize().alpha(if (lit) 1f else 0.45f), contentScale = ContentScale.Fit)
         }
     }) }
@@ -725,20 +765,14 @@ fun ChauffeurScreen(vm: VerifiedRuntime, u: UiState) {
     val c = u.engine.chauffeur
     Column(Modifier.padding(horizontal = hPad(36.dp), vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
         Card(Modifier.fillMaxWidth(), padding = if (isCompact()) 22.dp else 36.dp) {
-            // 넓은 화면은 예전처럼 글과 원 사이 간격 없이
-            Split(if (isCompact()) 16.dp else 0.dp, center = true, first = { cell ->
-                Column(cell, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("뒷좌석 승차감", fontSize = 32.sp, lineHeight = 41.sp, fontWeight = FontWeight.Bold, color = C.ink)
-                    Text(
-                        (if (c.active) "2열 착석·등받이 젖힘 감지" else "2열에 손님이 앉으면 시작해요") + "\n급감속 ${c.brakes}회 · 급가속 ${c.accels}회",
-                        fontSize = 24.sp, lineHeight = 34.sp, color = C.sub,
-                    )
-                    Text("급감속 순간에는 음성으로 바로 알려 드려요.", fontSize = 16.sp, color = C.sub)
-                }
-            }, second = { cell ->
-                // 넓은 화면에서는 오른쪽 끝, 폰 세로에서는 아래 가운데
-                Box(cell, contentAlignment = if (isCompact()) Alignment.Center else Alignment.CenterEnd) { ScoreRing(if (c.active) c.score else null, if (isCompact()) 200.dp else 280.dp) }
-            }, w2 = 0f)
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("뒷좌석 승차감", fontSize = 32.sp, lineHeight = 41.sp, fontWeight = FontWeight.Bold, color = C.ink)
+                Text(
+                    (if (c.active) "2열 착석·등받이 젖힘 감지" else "2열에 손님이 앉으면 시작해요") + "\n급감속 ${c.brakes}회 · 급가속 ${c.accels}회",
+                    fontSize = 24.sp, lineHeight = 34.sp, color = C.sub,
+                )
+                Text("급감속 순간에는 음성으로 바로 알려 드려요.", fontSize = 16.sp, color = C.sub)
+            }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("등받이 센서가 없는 차: 쇼퍼 모드 직접 켜기", Modifier.weight(1f), fontSize = 18.sp, color = C.ink)
@@ -807,7 +841,7 @@ fun TrunkScreen(vm: VerifiedRuntime, u: UiState) {
                     } else if (k.loaded) BigButton("괜찮아요 (알림 끄기)", style = BtnStyle.TONAL, fontSize = 19.sp) { vm.act { _, _ -> confirmTrunk(false); emptyList() } }
                 }
             }, second = { cell ->
-                Image(painterResource(if (C.dark) R.drawable.trunk_suv_cut else R.drawable.trunk_suv), "트렁크", cell.height(if (isCompact()) 160.dp else 200.dp).alpha(if (k.loaded) 1f else 0.6f), contentScale = ContentScale.Fit)
+                u.settings.carModel?.let { CarPhoto(it, cell.height(if (isCompact()) 140.dp else 180.dp).alpha(if (k.loaded) 1f else 0.6f)) }
             })
         }
     }
@@ -824,7 +858,7 @@ fun DiagScreen(vm: VerifiedRuntime, u: UiState, diag: List<DiagFinding>, go: (St
     val done = m.items.filter { it.done }
     Column(Modifier.padding(horizontal = hPad(36.dp), vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
         Card(Modifier.fillMaxWidth(), padding = 0.dp) { Box(Modifier.padding(horizontal = if (isCompact()) 18.dp else 24.dp, vertical = 8.dp)) { Split(if (isCompact()) 8.dp else 0.dp, w1 = 0f, center = true, first = { cell ->
-            Image(painterResource(if (C.dark) R.drawable.ioniq_mini_cut else R.drawable.ioniq_mini), "내 차", (if (isCompact()) cell else Modifier).width(220.dp).height(100.dp), contentScale = ContentScale.Fit)
+            u.settings.carModel?.let { CarPhoto(it, (if (isCompact()) cell else Modifier).width(220.dp).height(100.dp)) }
         }, second = { cell -> Column(cell.padding(start = if (isCompact()) 0.dp else 20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("내 차 설정 확인", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = C.ink)
@@ -986,6 +1020,11 @@ fun SettingsScreen(vm: VerifiedRuntime, u: UiState) {
                 }
             }
             Panel {
+                Text("원격 시동 알림", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Chip("휴대폰 진동", u.settings.startHaptic, Modifier.testTag("start_haptic")) { vm.settings { it.copy(startHaptic = !it.startHaptic) } }
+                Text("미리 공조가 켜지면 소리 없이 진동으로 알려요. 내연기관은 짧은 떨림, 전기차는 부드럽게 한 번이에요. 진동 장치가 없는 차 화면에서는 울리지 않아요.", fontSize = 15.sp, color = C.sub)
+            }
+            Panel {
                 Text(if (u.simAllowed) "시연용 차량 기능" else "차량 지원 기능", fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 if (!u.simAllowed && !u.carConnected) Text("차량 연결을 기다리고 있어요.", fontSize = 16.sp, color = C.sub)
                 else if (!u.simAllowed) CapsSummary(u.caps)
@@ -1128,7 +1167,7 @@ fun ComfortScreen(vm: VerifiedRuntime, u: UiState) {
         tabs = "좌석·공조" to "미리 켜기·예약",
         top = true,
         left = {
-            ScreenTitle("10", "출발 준비", "미리 켜 둘 실내 온도와 좌석 설정을 고르세요.", kicker = st.carModel?.label)
+            ScreenTitle("10", "출발 준비", "출발할 때 자동으로 켤 설정을 운전자별로 저장해요. 지금 바로 바꾸려면 제어 › 실내.", kicker = st.carModel?.label)
             Wrap {
                 st.comfort.keys.forEach { name -> Chip("$name 설정", name == who, big = true) { who = name } }
             }
