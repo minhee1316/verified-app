@@ -1,6 +1,7 @@
 package com.verified.incar
 
 import android.content.Context
+import android.content.SharedPreferences
 import com.verified.incar.core.Booking
 import com.verified.incar.core.CarCheck
 import com.verified.incar.core.CarModel
@@ -35,28 +36,70 @@ import org.json.JSONObject
 data class Session(val pending: TripLog?, val open: OpenTrip?, val lend: LendState, val trunk: TrunkState = TrunkState(), val streak: Int = 0)
 
 /** 차 안 로컬 저장소. 좌표·자세 같은 민감값은 여기에만 두고 서버로 보내지 않는다. */
-class Store(private val ctx: Context, private val vault: Vault = Vault.device, ns: String = "") {
+class Store(private val ctx: Context, private val vault: Vault = Vault.device, ns: String = "",
+    private val commitWrite: (SharedPreferences.Editor) -> Boolean = { it.commit() }) {
+    private val demoFiles = ns == TRIAL_NS
     // [ns]: 체험 모드(TRIAL_NS)는 실제 기록과 다른 파일에 써서 예시 기록이 섞이지 않게 한다
     private val prefs = ctx.getSharedPreferences("verified$ns", Context.MODE_PRIVATE)
     // 해마다 쌓이는 운행기록은 따로 둔다(다른 기록을 저장할 때마다 운행기록까지 다시 쓰지 않게)
     private val tripPrefs = ctx.getSharedPreferences("verified_trips$ns", Context.MODE_PRIVATE)
+    // 같은 key는 최신 상태만 남긴다. 실패한 원문은 프로세스 메모리에만 있고 평문 파일로 내리지 않는다.
+    private val pendingWrites = linkedMapOf<String, String>()
+    private val failedWrites = mutableSetOf<String>()
+    private val unreadable = mutableSetOf<String>()
 
-    /** 체험 기록 전체를 지운다(체험 저장소에서만 부른다. 내보낸 CSV는 건드리지 않는다). */
-    fun wipeAll() = prefs.edit().clear().commit() and tripPrefs.edit().clear().commit()
+    @get:Synchronized val hasPendingWrites: Boolean get() = pendingWrites.isNotEmpty()
+    @get:Synchronized val failedWriteKeys: Set<String> get() = failedWrites.toSet()
+    /** 복호화/저장소 읽기 실패. JSON 부분 손상은 기존 _broken 복구 경로를 그대로 쓴다. */
+    @get:Synchronized val readFailedKeys: Set<String> get() = unreadable.toSet()
+
+    /** 다음 persist/정차/종료에서 호출한다. 성공한 key만 대기열에서 빼고 실패한 최신값은 남긴다. */
+    @Synchronized fun retryPendingWrites(): Boolean {
+        pendingWrites.keys.toList().forEach(::tryPendingWrite)
+        return pendingWrites.isEmpty() && failedWrites.isEmpty()
+    }
+
+    /** 이 저장소의 설정·기록·사진·내보낸 CSV만 지운다. */
+    @Synchronized fun wipeAll(): Boolean {
+        pendingWrites.clear(); failedWrites.clear(); unreadable.clear()
+        val cleared = prefs.edit().clear().commit() and tripPrefs.edit().clear().commit()
+        clearRecordFiles()
+        return cleared
+    }
 
     companion object {
         const val TRIAL_NS = "_trial"
     }
+    /** 저장된 선택을 초기 시연 기본값으로 덮어쓰지 않기 위한 구분. */
+    internal fun hasSettings() = prefs.contains("settings")
     private fun prefsOf(key: String) = if (key == "trips") tripPrefs else prefs
 
-    private fun read(key: String) = prefsOf(key).getString(key, null)?.let(vault::open)
+    @Synchronized private fun read(key: String): String? = try {
+        prefsOf(key).getString(key, null)?.let(vault::open).also {
+            unreadable.remove(key)
+            if (key !in pendingWrites) failedWrites.remove(key)
+        }
+    } catch (error: Exception) {
+        unreadable.add(key)
+        throw error
+    }
 
-    /** [now]: 대리 1차 완료처럼 전원이 바로 꺼질 수 있는 기록은 동기로 쓴다. */
-    private fun write(key: String, value: String, now: Boolean = false) {
-        // 암호화 키를 못 얻으면 이번 저장만 건너뛴다(평문으로 쓰거나 앱이 죽지 않게). 원래 기록은 그대로 남는다
-        val sealed = runCatching { vault.seal(value) }.getOrNull() ?: return
-        val e = prefsOf(key).edit().putString(key, sealed)
-        if (now) e.commit() else e.apply()
+    /** 기존 now 호출은 호환 유지. 모든 저장의 성공을 확인하고 실패한 최신 상태만 재시도한다. */
+    @Suppress("UNUSED_PARAMETER")
+    @Synchronized private fun write(key: String, value: String, now: Boolean = false) {
+        // 시작 시 읽지 못한 암호문을 기본값 자동 저장/재시도로 덮지 않는다. 정상 재읽기가 먼저 필요하다.
+        if (key in unreadable) { failedWrites.add(key); return }
+        pendingWrites[key] = value
+        tryPendingWrite(key)
+    }
+
+    private fun tryPendingWrite(key: String) {
+        if (key in unreadable) return
+        val value = pendingWrites[key] ?: return
+        // apply는 디스크 실패를 보고하지 않는다. 상태가 바뀔 때만 호출되는 저장을 commit으로 확인한다.
+        val saved = runCatching { commitWrite(prefsOf(key).edit().putString(key, vault.seal(value))) }.getOrDefault(false)
+        if (saved) { pendingWrites.remove(key); failedWrites.remove(key) }
+        else failedWrites.add(key)
     }
 
     /**
@@ -65,7 +108,12 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
      */
     private fun <T> safe(key: String, default: T, parse: () -> T): T = runCatching(parse).getOrElse {
         val p = prefsOf(key)
-        if (!p.contains("${key}_broken")) p.getString(key, null)?.let { raw -> p.edit().putString("${key}_broken", raw).commit() }
+        val backedUp = runCatching {
+            if (!p.contains("${key}_broken")) p.getString(key, null)?.let { raw -> p.edit().putString("${key}_broken", raw).commit() } ?: true
+            else true
+        }.getOrDefault(false)
+        // 손상 원본 백업조차 실패했다면 기본값으로 덮기 전에 원본부터 지킨다.
+        if (!backedUp) synchronized(this) { unreadable.add(key) }
         default
     }
 
@@ -75,7 +123,8 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
         val s = safe("settings", d) { parseSettings() }
         // 읽기에 성공했으면 PIN도 이미 읽었다. 기록이 깨졌을 때(safe가 같은 기본값을 돌려줌)만 PIN을 따로 다시 읽는다
         if (s !== d) return s
-        val o = runCatching { read("settings")?.let { JSONObject(it) } }.getOrNull() ?: return s
+        // 부분 PIN 복구만으로 전체 설정의 읽기/원본 백업 실패 보호를 해제하지 않는다.
+        val o = runCatching { prefs.getString("settings", null)?.let(vault::open)?.let { JSONObject(it) } }.getOrNull() ?: return s
         val hash = o.optString("ownerPinHash").ifEmpty { null } ?: return s
         return s.copy(ownerPinHash = hash, ownerPinSalt = o.optString("ownerPinSalt").ifEmpty { null }, ownerRecoveryHash = o.optString("ownerRecoveryHash").ifEmpty { null })
     }
@@ -125,8 +174,10 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             } ?: d.sharedKeys,
             enforcementAlert = o.optBoolean("enforcementAlert", d.enforcementAlert),
             startHaptic = o.optBoolean("startHaptic", d.startHaptic),
+            homeFavorites = o.optJSONArray("homeFavorites")?.strings()?.distinct()?.filter { it in com.verified.incar.core.HomeFavorite.entries.map { f -> f.name } } ?: emptyList(),
             quickOrder = o.optString("quickOrder").takeIf { it.isNotEmpty() }?.split(",")?.let { com.verified.incar.core.normalizeQuickOrder(it) } ?: d.quickOrder,
             memberPoints = o.optInt("memberPoints", d.memberPoints),
+            parkingNote = o.optString("parkingNote"), parkingNoteAtMs = o.optLong("parkingNoteAt"),
             ownerPinHash = o.optString("ownerPinHash").ifEmpty { null },
             ownerPinSalt = o.optString("ownerPinSalt").ifEmpty { null },
             ownerRecoveryHash = o.optString("ownerRecoveryHash").ifEmpty { null },
@@ -166,11 +217,29 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             .put("enforcementAlert", s.enforcementAlert)
             .put("startHaptic", s.startHaptic)
             .put("quickOrder", s.quickOrder.joinToString(","))
+            .put("homeFavorites", JSONArray(s.homeFavorites))
             .put("memberPoints", s.memberPoints)
+            .put("parkingNote", s.parkingNote).put("parkingNoteAt", s.parkingNoteAtMs)
             .put("ownerPinHash", s.ownerPinHash.orEmpty()).put("ownerPinSalt", s.ownerPinSalt.orEmpty())
             .put("ownerRecoveryHash", s.ownerRecoveryHash.orEmpty())
             .put("rampTurns", JSONObject(s.rampTurnsPerFloor.map { (k, v) -> k.name to v.toDouble() }.toMap()))
         write("settings", o.toString())
+    }
+
+    fun saveControls(log: List<com.verified.incar.core.ControlEvidence>) = write("controls", JSONArray(log.take(30).map { ev ->
+        JSONObject().put("kind", ev.kind.name).put("at", ev.sentAtMs).put("result", ev.result.name)
+            .put("steps", JSONArray(ev.steps.map { (at, line) -> JSONObject().put("at", at).put("line", line) }))
+    }).toString(), now = true)
+
+    fun loadControls(): List<com.verified.incar.core.ControlEvidence> = safe("controls", emptyList()) {
+        val a = read("controls")?.let(::JSONArray) ?: JSONArray()
+        (0 until a.length()).mapNotNull { i -> runCatching {
+            val o = a.getJSONObject(i)
+            val steps = o.getJSONArray("steps")
+            com.verified.incar.core.ControlEvidence(com.verified.incar.core.ControlKind.valueOf(o.getString("kind")), o.getLong("at"),
+                (0 until steps.length()).map { j -> steps.getJSONObject(j).let { it.getLong("at") to it.getString("line") } },
+                com.verified.incar.core.ControlResult.valueOf(o.getString("result")))
+        }.getOrNull() }.take(30)
     }
 
     fun loadTrips(): List<TripLog> {
@@ -214,7 +283,8 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             .putOpt("checkIn", checkJson(l.checkIn)).putOpt("checkOut", checkJson(l.checkOut)).put("prep", JSONArray(l.prep.map { it.name }))
             .putOpt("startLat", l.startLat).putOpt("startLon", l.startLon).putOpt("startAccuracy", l.startAccuracyM)
             .put("roamWarned", l.roamWarned).put("parkedSocUsed", l.parkedSocUsed)
-            .put("idleMs", l.idleMs).putOpt("idleSince", l.idleSinceMs).put("speedWarned", l.speedWarned))
+            .put("idleMs", l.idleMs).putOpt("idleSince", l.idleSinceMs).put("speedWarned", l.speedWarned)
+            .put("memo", l.memo).putOpt("due", l.dueMs).put("dueWarned", l.dueWarned))
         write("session", o.toString(), now)
     }
 
@@ -233,6 +303,7 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
                 startAccuracyM = l.optDoubleOrNull("startAccuracy")?.toFloat(),
                 roamWarned = l.optBoolean("roamWarned"), parkedSocUsed = l.optInt("parkedSocUsed"),
                 idleMs = l.optLong("idleMs"), idleSinceMs = if (l.has("idleSince")) l.getLong("idleSince") else null, speedWarned = l.optBoolean("speedWarned"),
+                memo = l.optString("memo"), dueMs = if (l.has("due")) l.getLong("due") else null, dueWarned = l.optBoolean("dueWarned"),
             )
         } ?: LendState()
         // 트렁크·연속 기록은 나중에 더한 칸이라 opt로 읽는다(예전 기록에서 세션 전체를 잃지 않게)
@@ -247,18 +318,28 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
                 .put("phoneExample", it.phoneExample).put("phoneAttempts", it.phoneAttempts).put("phoneRetryAt", it.phoneRetryAt)
         }).toString()
 
-    fun saveNotices(list: List<SentNotice>): Boolean = runCatching {
-        prefs.edit().putString("notices", vault.seal(noticesJson(list))).commit()
-    }.getOrDefault(false)
+    /** 다른 기록과 같은 저장 경로(실패 시 최신 값 재시도, 읽지 못한 암호문 보호)를 쓴다. 이번에 저장됐는지 돌려준다. */
+    @Synchronized fun saveNotices(list: List<SentNotice>): Boolean {
+        write("notices", noticesJson(list), now = true)
+        return "notices" !in failedWrites
+    }
 
     fun loadPhoneTopic(): String? = runCatching { read("phoneTopic")?.takeIf(PhoneRelay::validTopic) }.getOrNull()
 
     // 구독을 해제하면 대기열도 같은 트랜잭션에서 닫아 다음 구독자에게 옛 기록이 가지 않게 한다.
-    fun savePhonePairing(topic: String?, notices: List<SentNotice>): Boolean = runCatching {
-        val edit = prefs.edit().putString("notices", vault.seal(noticesJson(notices)))
-        if (topic == null) edit.remove("phoneTopic") else edit.putString("phoneTopic", vault.seal(topic))
-        edit.commit()
-    }.getOrDefault(false)
+    @Synchronized fun savePhonePairing(topic: String?, notices: List<SentNotice>): Boolean {
+        // 시작할 때 읽지 못한 알림 암호문은 덮어쓰지 않는다(write와 같은 규칙). 연결 해제·변경은 그래도 저장한다
+        val keepUnreadableNotices = "notices" in unreadable
+        val saved = runCatching {
+            val edit = prefs.edit()
+            if (!keepUnreadableNotices) edit.putString("notices", vault.seal(noticesJson(notices)))
+            if (topic == null) edit.remove("phoneTopic") else edit.putString("phoneTopic", vault.seal(topic))
+            commitWrite(edit)
+        }.getOrDefault(false)
+        // 재시도를 기다리던 예전 알림 목록이 나중에 옛 구독의 대기 알림을 되살리지 않게 비운다
+        if (saved) { pendingWrites.remove("notices"); failedWrites.remove("notices") }
+        return saved
+    }
 
     fun loadNotices(): List<com.verified.incar.SentNotice> = safe("notices", emptyList()) {
         val a = read("notices")?.let { JSONArray(it) } ?: return@safe emptyList()
@@ -335,6 +416,7 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
             val it = original.respectingValetConsent()
             JSONObject().put("kind", it.kind).put("start", it.startMs).put("end", it.endMs).putOpt("km", it.km)
                 .put("speedKnown", it.speedKnown).put("changes", JSONArray(it.changes)).put("ok", it.ok)
+                .put("proof", proofJson(it.proof)).put("memo", it.memo).putOpt("due", it.dueMs)
                 .also { o -> if (it.recordsDrivingStats) o.put("max", it.maxSpeed.toDouble()).put("brakes", it.brakes) }
         }).toString(), now)
     }
@@ -345,7 +427,8 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
         val history = (0 until a.length()).map { i ->
             a.getJSONObject(i).let {
                 val record = HandoverRecord(it.getString("kind"), it.getLong("start"), it.getLong("end"), it.optDoubleOrNull("km"), it.optDouble("max", 0.0).toFloat(),
-                    it.optInt("brakes"), it.optJSONArray("changes")?.strings() ?: emptyList(), it.getBoolean("ok"), it.optBoolean("speedKnown", it.optDouble("max", 0.0) > 0.0))
+                    it.optInt("brakes"), it.optJSONArray("changes")?.strings() ?: emptyList(), it.getBoolean("ok"), it.optBoolean("speedKnown", it.optDouble("max", 0.0) > 0.0),
+                    proof = proofOf(it.optJSONArray("proof")), memo = it.optString("memo"), dueMs = if (it.has("due")) it.getLong("due") else null)
                 val cleaned = record.respectingValetConsent()
                 if (cleaned != record || (!record.recordsDrivingStats && (it.has("max") || it.has("brakes")))) migrated = true
                 cleaned
@@ -385,20 +468,34 @@ class Store(private val ctx: Context, private val vault: Vault = Vault.device, n
 
     /** 내 기록 지우기: 운행기록·대리 기록·주행 통계를 지운다(설정은 호출한 쪽에서 덮어쓴다). */
     /** '내 기록 지우기': 깨진 기록 사본과 내보낸 운행기록부 CSV까지 지운다. */
-    fun clearRecords() {
+    /** 모두 지웠으면 true. 하나라도 디스크에 반영하지 못하면 false(화면이 '삭제됐어요'로 알리지 않게). */
+    @Synchronized fun clearRecords(): Boolean {
+        // 사용자가 지운 기록이 오래된 재시도 payload로 되살아나지 않게 한다. 설정은 별도 저장한다.
+        pendingWrites.keys.removeAll { it != "settings" }
+        failedWrites.removeAll { it != "settings" }
+        unreadable.removeAll { it != "settings" }
         // 가장 민감한 출발지·도착지 기록부터 지운다
-        tripPrefs.edit().clear().commit()
-        // 다운로드 폴더에 내보낸 CSV(이 앱이 만든 것만 보인다)
+        val trips = runCatching { tripPrefs.edit().clear().commit() }.getOrDefault(false)
+        clearRecordFiles()
+        val rest = runCatching {
+            prefs.edit().remove("trips").remove("valet").remove("stats").remove("session").remove("notices").remove("notices_broken")
+                .remove("controls").remove("controls_broken").remove("history").remove("history_broken").remove("phoneTopic")
+                .remove("settings_broken").remove("trips_broken").remove("valet_broken").remove("stats_broken").remove("session_broken").commit()
+        }.getOrDefault(false)
+        return trips && rest
+    }
+
+    private fun clearRecordFiles() {
+        // 시연 초기화가 실제 내보낸 CSV나 사진을 지우지 않도록 namespace별 이름만 선택한다.
         runCatching {
             ctx.contentResolver.delete(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                "${android.provider.MediaStore.MediaColumns.DISPLAY_NAME} LIKE ? OR ${android.provider.MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?", arrayOf("운행기록부_%.csv", "맡김이력서_%.csv"))
+                List(3) { "${android.provider.MediaStore.MediaColumns.DISPLAY_NAME} LIKE ?" }.joinToString(" OR "),
+                (RecordFiles.csvPrefixes(demoFiles).map { "$it%.csv" } + "${RecordFiles.pdfPrefix(demoFiles)}%.pdf").toTypedArray())
         }
-        prefs.edit().remove("trips").remove("valet").remove("stats").remove("session").remove("notices").remove("notices_broken")
-            .remove("history").remove("history_broken").remove("phoneTopic")
-            .remove("settings_broken").remove("trips_broken").remove("valet_broken").remove("stats_broken").remove("session_broken").commit()
         listOfNotNull(ctx.getExternalFilesDir(null), ctx.filesDir).forEach { dir ->
-            dir.listFiles { f -> (f.name.startsWith("운행기록부_") || f.name.startsWith("맡김이력서_")) && f.name.endsWith(".csv") }?.forEach { it.delete() }
+            dir.listFiles { f -> f.isFile && RecordFiles.ownsCsv(f.name, demoFiles) }?.forEach { it.delete() }
         }
+        RecordFiles.photoRoot(ctx, demoFiles).deleteRecursively()
     }
 
     private fun preset(o: JSONObject) = ComfortPreset(

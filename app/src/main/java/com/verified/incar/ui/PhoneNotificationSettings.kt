@@ -36,7 +36,7 @@ internal fun PhoneDelivery?.displayText() = when (this) {
     PhoneDelivery.QUEUED -> "휴대폰 전송 대기"
     PhoneDelivery.ACCEPTED -> "알림 서버 접수"
     PhoneDelivery.FAILED -> "휴대폰 전송 실패"
-    null -> "차 안 기록"
+    null -> ""
 }
 
 @Composable
@@ -72,7 +72,7 @@ internal fun PhoneNotificationSettings(vm: VerifiedRuntime, u: UiState) {
                 u.notices.firstOrNull { it.phoneStatus != null }?.let {
                     Text("최근 전송 · ${it.phoneStatus.displayText()}", color = C.ink, fontSize = 17.sp)
                 }
-                Text("휴대폰 알림창에서 ‘VERIFIED’ 시험 알림을 확인해 주세요. 알림이 없으면 ntfy의 주제 이름과 휴대폰 알림 권한을 확인하세요.", color = C.sub, fontSize = 16.sp)
+                Text("휴대폰 알림창에서 ‘Hyundai CarGuard’ 시험 알림을 확인해 주세요. 알림이 없으면 ntfy의 주제 이름과 휴대폰 알림 권한을 확인하세요.", color = C.sub, fontSize = 16.sp)
                 Chip("휴대폰 연결 해제", null) { vm.disablePhoneNotifications() }
             }
         }

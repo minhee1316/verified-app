@@ -17,11 +17,11 @@ class PhoneRelayTest {
         assertNotEquals(topic, PhoneRelay.newTopic())
         assertFalse(PhoneRelay.validTopic("https://other.test/$topic"))
         val notice = SentNotice(0, "차주 폰", "김민수 · 수리비 30만원", "집 좌표 37.5,126.9", Level.WARN, phoneExample = true)
-        assertEquals("예시 차량 · 차량에서 확인할 사항이 있어요. 자세한 내용은 확인됨 앱에서 확인하세요.", PhoneRelay.message(notice))
+        assertEquals("예시 차량 · 차량에서 확인할 사항이 있어요. 자세한 내용은 현대 카가드 앱에서 확인하세요.", PhoneRelay.message(notice))
     }
 
     @Test fun postsUtf8WithStableSequenceAndHonorsHttpResults() {
-        val body = "확인됨 시험 알림이 도착했어요."
+        val body = "현대 카가드 시험 알림이 도착했어요."
         val sequence = "84640030-1cb0-41ea-aab2-603acf2747e7"
         val worker = Executors.newSingleThreadExecutor()
         try {
@@ -42,7 +42,7 @@ class PhoneRelayTest {
                             val bytes = ByteArray(headers.getValue("content-length").toInt())
                             stream.readFully(bytes)
                             assertEquals(body, bytes.toString(Charsets.UTF_8))
-                            assertEquals("VERIFIED", headers["x-title"])
+                            assertEquals("Hyundai CarGuard", headers["x-title"])
                             assertEquals(sequence, headers["x-sequence-id"])
                             val response = "HTTP/1.1 $code Test\r\nConnection: close\r\nRetry-After: 30\r\nLocation: /unexpected\r\nContent-Length: 0\r\n\r\n"
                             client.getOutputStream().write(response.toByteArray(Charsets.US_ASCII))

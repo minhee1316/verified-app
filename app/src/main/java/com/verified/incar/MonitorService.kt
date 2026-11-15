@@ -31,8 +31,8 @@ class MonitorService : Service() {
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(NotificationChannel(CHANNEL, "차 상태 확인", NotificationManager.IMPORTANCE_MIN))
         n = Notification.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_fg)
-            .setContentTitle("확인됨")
+            .setSmallIcon(R.drawable.ic_mono)
+            .setContentTitle(getString(R.string.app_name))
             .setContentText("차 상태를 확인하고 있어요")
             .setOngoing(true)
             .build()
@@ -57,14 +57,21 @@ class MonitorService : Service() {
 
         /** [ui]: 화면이 보이는 상태에서 부를 때 true(위치 유형을 붙일 수 있다). */
         fun start(ctx: Context, ui: Boolean = false) {
+            // 폰 시연은 화면 안에서만 실행한다. 부팅 수신·다른 진입점도 같은 정책을 따른다.
+            if (!ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)) return
             runCatching { ctx.startForegroundService(Intent(ctx, MonitorService::class.java).putExtra(EXTRA_UI, ui)) }
         }
     }
 }
 
-/** 시동이 켜져 차량 화면이 부팅되면 사용자가 앱을 열지 않아도 감시를 시작한다. */
+/**
+ * 시동이 켜져 차량 화면이 부팅되면 사용자가 앱을 열지 않아도 감시를 시작한다.
+ * 앱을 업데이트하면 시스템이 실행 중이던 프로세스를 끝내므로, 업데이트 직후(MY_PACKAGE_REPLACED)에도 같은 방식으로 다시 시작한다.
+ */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED) MonitorService.start(context)
+        if ((intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) &&
+            context.packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)
+        ) MonitorService.start(context)
     }
 }

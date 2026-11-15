@@ -129,18 +129,20 @@ class ScreensTest {
     }
 
     @Config(qualifiers = "w411dp-h891dp-port-mdpi")
-    @Test fun releaseHandsetCanReachHomeRegistrationBeforeValetConsent() {
+    @Test fun releaseHandsetCanStartValetDemoWithoutHomeRegistration() {
         val app = RuntimeEnvironment.getApplication()
         val flags = app.applicationInfo.flags
         try {
             app.applicationInfo.flags = flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE.inv()
             start()
             tab("VALET")
-            rule.onNodeWithText("장소 등록 열기").assertExists()
-            rule.onNodeWithText("동의하고 출발").assertDoesNotExist()
-            vm.settings { it.copy(pins = mapOf(Place.HOME to com.verified.incar.core.Pin(37.0, 127.0))) }
-            rule.waitForIdle()
+            assertTrue(vm.ui.value.trial)
+            assertTrue(vm.ui.value.settings.pins.isEmpty())
+            rule.onNodeWithText("장소 등록 열기").assertDoesNotExist()
             rule.onNodeWithText("동의하고 출발").assertExists()
+            rule.onNodeWithTag("valet_consent").performScrollTo().performClick()
+            rule.waitForIdle()
+            assertEquals(ValetPhase.DRIVING, e().valet.phase)
         } finally {
             app.applicationInfo.flags = flags
         }
@@ -211,12 +213,12 @@ class ScreensTest {
     @Config(qualifiers = "w360dp-h800dp-port-mdpi")
     @Test fun phoneBackRestoresSituationAfterOpeningControl() {
         start()
-        rule.onNodeWithText("차량 등록").performClick()
-        rule.onNodeWithTag("car_GRANDEUR").performClick()
-        rule.onAllNodesWithContentDescription("뒤로").onFirst().performClick()
+        // 홈은 등록 전에도 예시 차량을 보여 준다. 이 검사는 기능 선택·뒤로가기 복원을 검증한다.
+        vm.settings { it.copy(carModel = com.verified.incar.core.CarModel.GRANDEUR) }
+        rule.waitForIdle()
         rule.onNodeWithText("더 뉴 그랜저").assertExists()
         tab("VERIFIED")
-        rule.onNodeWithTag("situation_PARKING").performClick()
+        rule.onNodeWithTag("situation_PARKING").performScrollTo().performClick()
         rule.onNodeWithTag("feature_CONTROL").performScrollTo().performClick()
         rule.onNodeWithTag("control_top").assertExists()
         rule.onAllNodesWithContentDescription("뒤로").onFirst().performClick()
@@ -545,7 +547,6 @@ class ScreensTest {
         assertTrue(vm.ui.value.feed.any { "왼쪽 뒤" in it.title })
         tab("SERVICE")
         shot("37a_차량관리_타이어누설")
-        rule.onNodeWithTag("service_start", useUnmergedTree = true).performScrollTo()
         rule.waitForIdle()
         shot("37_차량관리_맡김리포트_타이어")
         // 고속 주행 뒤 멈춰 비상등
@@ -677,7 +678,7 @@ class ScreensTest {
         vm.settings { it.copy(sharedKeys = listOf(com.verified.incar.core.SharedKey("자녀", "2000-01-01"))) }
         tab("KEY")
         assertTrue(rule.onAllNodesWithText("공유한 사람이 없어요").fetchSemanticsNodes().isNotEmpty())
-        click("자녀 7일 공유")
+        rule.onNodeWithTag("key_share").performScrollTo().performClick(); rule.waitForIdle()
         val keys = vm.ui.value.settings.sharedKeys
         assertEquals(1, keys.size)
         assertEquals(java.time.LocalDate.now().plusDays(7).toString(), keys.single().until)
@@ -775,7 +776,9 @@ class ScreensTest {
         assertTrue(rule.onAllNodesWithText("아직 기록이 없어요").fetchSemanticsNodes().isNotEmpty())
         twoHandovers()
         assertEquals(2, rule.onAllNodesWithTag("history_record").fetchSemanticsNodes().size)
-        assertTrue(rule.onAllNodesWithText("총 2회 맡김", substring = true).fetchSemanticsNodes().isNotEmpty())
+        // 총 맡김 횟수는 숫자 칸에 한 번만 나온다
+        rule.onNodeWithTag("history_tiles").assertExists()
+        assertTrue(rule.onAllNodesWithText("총 맡김").fetchSemanticsNodes().isNotEmpty() && rule.onAllNodesWithText("2회").fetchSemanticsNodes().isNotEmpty())
         shot("48_맡김이력서")
         rule.onNodeWithTag("history_export").performScrollTo().performClick(); rule.waitForIdle()
         assertTrue(vm.ui.value.toast, "맡김 이력서 CSV" in vm.ui.value.toast)
@@ -792,8 +795,8 @@ class ScreensTest {
         repeat(3) { skip(10) }
         assertTrue(e().lend.roamWarned)
         assertTrue(vm.ui.value.notices.any { "정비소를 벗어났어요" in it.title })
-        tab("SERVICE")
-        rule.onNodeWithTag("prep_BEFORE").performScrollTo()
+        tab("HAND_SERVICE")
+        rule.onNodeWithTag("service_hero").performScrollTo()
         assertTrue(rule.onAllNodesWithText("맡긴 차가 정비소를 벗어났어요", substring = true).fetchSemanticsNodes().isNotEmpty())
         shot("49_맡김_이탈경고")
     }
@@ -873,7 +876,10 @@ class ScreensTest {
         rule.onNodeWithTag("valet_end").performScrollTo().performTouchInput { longClick() }; rule.waitForIdle()
         assertTrue(!e().valet.active)
 
+        // 빌려주기 시작·반납은 빌려주기 화면 한 곳에서만(운전자 확인 화면에는 없음)
         tab("DRIVER")
+        rule.onNodeWithTag("lend_start").assertDoesNotExist()
+        tab("HAND_LEND")
         rule.onNodeWithTag("lend_start").performScrollTo().performClick(); rule.waitForIdle()
         assertTrue(e().lend.active)
         sig { it.copy(driverSeated = false) }
@@ -893,6 +899,8 @@ class ScreensTest {
 
         sig { it.copy(lat = 37.5665, lon = 126.978) }
         tab("SERVICE")
+        rule.onNodeWithTag("service_start").assertDoesNotExist()
+        tab("HAND_SERVICE")
         rule.onNodeWithTag("service_start").performScrollTo().performClick(); rule.waitForIdle()
         assertTrue(e().lend.active && e().lend.kind == com.verified.incar.core.HandKind.SERVICE)
         sig { it.copy(odometerKm = it.odometerKm + 6, lat = 37.5665 + 0.0135) }

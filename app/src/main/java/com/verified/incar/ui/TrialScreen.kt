@@ -39,19 +39,30 @@ internal val TRIAL_MODELS = listOf(CarModel.GRANDEUR, CarModel.AVANTE, CarModel.
 @Composable
 internal fun TrialScreen(vm: VerifiedRuntime, u: UiState) {
     val context = LocalContext.current
+    var resetConfirm by androidx.compose.runtime.remember { mutableStateOf(false) }
+    if (resetConfirm) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { resetConfirm = false },
+        title = { Text("시연 기록을 초기화할까요?") },
+        text = { Text("예시 차량의 맡김 기록·알림·설정이 지워져요. 실제 차량 기록은 유지돼요.") },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = {
+            resetConfirm = false
+            if (vm.endTrial()) restartApp(context)
+        }) { Text("시연 기록 초기화") } },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = { resetConfirm = false }) { Text("취소") } },
+    )
     Column(Modifier.fillMaxWidth().padding(hPad(28.dp)).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         when {
             u.trial -> Card(Modifier.fillMaxWidth(), padding = 20.dp) {
-                Text("체험 모드", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = C.ink)
-                Text("지금 보이는 차량 값과 기록은 모두 예시예요.", fontSize = 18.sp, color = C.ink)
+                Text("등록 없이 바로 체험", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = C.ink)
+                Text("문 잠금·공조를 누르면 예시 차량 상태가 바뀌어요. 대리 주차와 돌려받기까지 진행해 보세요.", fontSize = 18.sp, color = C.ink)
+                Text("지금 보이는 차량 값과 기록은 시연용이며 실제 차에 명령을 보내지 않아요.", fontSize = 16.sp, color = C.sub)
                 Text("다른 차종으로 바꾸기", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = C.ink)
                 ModelChoices(u.settings.carModel) { model -> vm.settings { it.copy(carModel = model) } }
-                Text("체험을 끝내면 예시 맡김 기록과 알림을 지우고 실제 모드로 돌아가요. 앱이 다시 열려요.", fontSize = 17.sp, color = C.sub)
-                BigButton("체험 끝내기", Modifier.fillMaxWidth().testTag("trial_finish"), BtnStyle.OUTLINE) {
-                    if (vm.endTrial()) restartApp(context)
-                }
+                BigButton("체험 순서 보기", Modifier.fillMaxWidth()) { vm.navigate.value = "VERIFIED" }
+                Text("처음부터 다시 시연하려면 예시 기록을 초기화하세요. 앱이 다시 열려요.", fontSize = 17.sp, color = C.sub)
+                BigButton("시연 기록 초기화", Modifier.fillMaxWidth().testTag("trial_finish"), BtnStyle.OUTLINE) { resetConfirm = true }
             }
-            u.trialAvailable -> {
+            u.trialAvailable || (u.simAllowed && !u.carConnected) -> {
                 var pick by rememberSaveable { mutableStateOf(u.settings.carModel?.takeIf { it in TRIAL_MODELS } ?: CarModel.GRANDEUR) }
                 Card(Modifier.fillMaxWidth(), padding = 20.dp) {
                     Text("예시 차량 고르기", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = C.ink)

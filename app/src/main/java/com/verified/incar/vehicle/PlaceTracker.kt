@@ -7,6 +7,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Looper
+import android.os.Build
 import com.verified.incar.core.Pin
 import com.verified.incar.core.Place
 import com.verified.incar.core.PlaceResolver
@@ -36,10 +37,19 @@ class PlaceTracker(
     var paused = false
 
     fun start(): Boolean {
+        // 설정에서 권한을 바꾼 뒤 돌아온 경우, 예전 등록 핸들만 보고 실행 중이라고 표시하지 않는다.
+        if (ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            stop()
+            return false
+        }
         if (running) return true
-        if (ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return false
         val m = ctx.getSystemService(LocationManager::class.java) ?: return false
-        val provider = listOf(LocationManager.GPS_PROVIDER, LocationManager.FUSED_PROVIDER, LocationManager.NETWORK_PROVIDER).firstOrNull { m.isProviderEnabled(it) } ?: return false
+        val providers = buildList {
+            add(LocationManager.GPS_PROVIDER)
+            if (Build.VERSION.SDK_INT >= 31) add(LocationManager.FUSED_PROVIDER)
+            add(LocationManager.NETWORK_PROVIDER)
+        }
+        val provider = providers.firstOrNull { m.isProviderEnabled(it) } ?: return false
         return runCatching {
             // 거리 조건 0: 서 있어도 5초마다 받아야 신호 대기·주차를 '지하(끊김)'로 오판하지 않는다
             m.requestLocationUpdates(provider, 5_000L, 0f, listener, Looper.getMainLooper())
@@ -50,8 +60,13 @@ class PlaceTracker(
     }
 
     fun stop() {
-        lm?.removeUpdates(listener)
+        val hadLocation = lm != null || last != null
+        // 권한이 사라진 기기에서도 정리가 실패해 앱 종료로 이어지지 않게 한다.
+        runCatching { lm?.removeUpdates(listener) }
         lm = null
+        last = null
+        lastFixMs = 0L
+        if (hadLocation) signals.update { it.copy(gpsLost = true, lat = null, lon = null, gpsAccuracyM = null, seenAt = it.seenAt - "gps") }
     }
 
     private fun onFix(loc: Location) {

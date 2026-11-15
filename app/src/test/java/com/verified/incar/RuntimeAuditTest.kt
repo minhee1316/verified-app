@@ -44,12 +44,13 @@ class RuntimeAuditTest {
     private fun notice(title: String) = listOf(Effect.Notify("차주 폰", title, "본문", Level.INFO))
 
     @Test fun recoveredValet_doesNotCompleteOrNotifyAcrossRestarts() {
-        // 예시 GPS가 자동 주입되는 debug 체험 대신, 실제 신호를 기다리는 제출용 환경을 사용한다.
+        // 연결된 차량에서 읽기를 기다리는 상태로 실제 저장소를 복구한다(미연결 제출 앱은 별도 시연 저장소).
         app.applicationInfo.flags = app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
         Store(app).saveValet(ValetState(phase = ValetPhase.PRELIM, prelimAtMs = 1, moved = true))
-        val first = rt()
+        fun connectedRuntime() = VerifiedRuntime(app, false, PhoneRelay::publish) { _, _ -> ConnectedWithoutReadings() }
+        val first = connectedRuntime()
         first.close()
-        val r = rt()
+        val r = connectedRuntime()
         assertTrue(r.ui.value.notices.none { it.title == "① 대리 주차 완료" })
         assertEquals(ValetPhase.PRELIM, Store(app).loadValet().phase)
         assertNotNull(Store(app).loadValet().verificationPending)
@@ -65,6 +66,17 @@ class RuntimeAuditTest {
         r.sim { it.copy(posture = Postures.STRANGER) }
         r.wipeMyData()
         assertTrue(rt().ui.value.notices.none { it.title == "지울 알림" })
+    }
+
+    /** 내 기록 지우기는 주차 위치 사진과 함께 같은 주차 위치 메모·적은 시각도 지운다. */
+    @Test fun wipe_clearsParkingNoteTogetherWithParkingPhoto() {
+        val r = rt()
+        r.settings { it.copy(parkingNote = "B2 C구역 32번", parkingNoteAtMs = 1_000L) }
+        r.wipeMyData()
+        assertEquals("", r.ui.value.settings.parkingNote)
+        assertEquals(0L, r.ui.value.settings.parkingNoteAtMs)
+        assertEquals("", rt().ui.value.settings.parkingNote)
+        r.close()
     }
 
     @Test fun startsOfflineWithoutNetwork_thenSendsWhenBack() {
@@ -175,10 +187,24 @@ class RuntimeAuditTest {
     }
 
     @Test fun simulator_isBlockedOnCarOs_inReleaseBuild() {
-        // 차 서비스 연결에 실패한 자동차 OS의 제출용 빌드(JVM에는 car_service가 없어 연결 실패 분기를 탄다)
+        // 실제 연결 여부를 provider로 재현한다. 연결 실패는 이제 등록 없는 시연으로 동작한다.
         shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_AUTOMOTIVE, true)
         app.applicationInfo.flags = app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
-        val r = rt()
+        val r = VerifiedRuntime(app, false, PhoneRelay::publish) { signals, _ ->
+            object : com.verified.incar.vehicle.VehicleSignalSource {
+                override val connected = true
+                override val caps = com.verified.incar.core.Capabilities(climateControl = false, seatControl = false, ambientControl = false)
+                override val live = setOf("gear", "speed")
+                override var paused = 0
+                override fun connect(): Boolean {
+                    signals.value = signals.value.copy(gear = Gear.D, speedKmh = 30f, place = Place.OTHER, seenAt = mapOf("gear" to 1L, "speed" to 1L))
+                    return true
+                }
+                override fun resubscribeIfGranted() = false
+                override fun refresh(name: String) = Unit
+                override fun disconnect() = Unit
+            }
+        }
         assertTrue(!r.simAllowed && !r.ui.value.simAllowed)
         r.settings { it.copy(pins = mapOf(Place.HOME to Pin(37.0, 127.0))) }
         r.act { _, _ -> startValet(); emptyList() }

@@ -96,10 +96,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 차속·배터리 등 차 신호 위험 권한과, 장소 판정(집·학교)용 위치를 실행 중 요청한다. 거부하면 시뮬레이터 값으로 동작한다
-        val wanted = listOf("android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION") +
-            if (packageManager.hasSystemFeature("android.hardware.type.automotive")) com.verified.incar.vehicle.CarBridge.RUNTIME_PERMISSIONS else emptyList()
-        askPermissions.launch(wanted.toTypedArray())
+        // 휴대폰 시연은 GPS·차량 권한 없이 시작한다. 실제 차량의 장소·신호 판정에만 권한을 요청한다.
+        // 화면을 다시 만들 때(글자 크기·언어 변경, 프로세스 복원)는 다시 묻지 않는다. 나중에 허용한 권한은 onResume이 반영한다
+        if (savedInstanceState == null && packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE)) {
+            val wanted = listOf("android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION") +
+                com.verified.incar.vehicle.CarBridge.RUNTIME_PERMISSIONS
+            askPermissions.launch(wanted.toTypedArray())
+        }
         // Pleos는 방향을 정하지 않으면 세로 창 하나로 띄운다. 차 화면은 가로 2단 기준이라 차에서만 가로로 고정한다
         if (packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE)) requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         setContent { MaterialTheme { App((application as VerifiedApp).runtime) } }
@@ -111,7 +114,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // 판정이 화면 밖에서도 계속되도록 감시 서비스를 띄운다. 화면이 보일 때 불러야 내비가 앞에 와도 위치가 이어진다
         // (권한 창은 화면을 멈추기만 해서 허용 직후에는 onResume만 불린다)
-        MonitorService.start(this, ui = true)
+        if (packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE)) MonitorService.start(this, ui = true)
         // 설정 앱에서 나중에 허용한 차 권한도 반영한다(바뀐 게 없으면 아무것도 하지 않는다)
         (application as VerifiedApp).runtime.onPermissions()
     }
@@ -134,8 +137,10 @@ class MainActivity : ComponentActivity() {
 
 /** 하위 화면 제목 (가운데 정렬 앱바). */
 private fun titleOf(id: String): String = if (com.verified.incar.core.VehicleFocus.fromRoute(id) != null) "차량 둘러보기" else Module.entries.firstOrNull { it.name == id }?.title ?: when (id) {
-    "HOME" -> "확인됨"; "SHOP" -> "샵"; "CONTROL" -> "차량 제어"; "VERIFIED" -> "기능"
+    "HOME" -> "현대 카가드"; "SHOP" -> "샵"; "CONTROL" -> "차량 제어"; "VERIFIED" -> "기능"
     "CARLIFE" -> "카라이프"; "WALLET" -> "월렛"; "MYPAGE" -> "더보기"; "HISTORY" -> "기록"; "SERVICE" -> "차량 관리"; "INSIGHT" -> "드라이빙 인사이트"; "KEY" -> "디지털 키"
+    "CONTROL_HISTORY" -> "최근 제어 결과"
+    "SIGNALS" -> "차량 연결·신호 상태"
     "CAR_SETUP" -> "차량 등록"
     "VEHICLE_VIEW" -> "차량 둘러보기"
     "HAND_SERVICE" -> "정비 맡기기"
@@ -143,14 +148,14 @@ private fun titleOf(id: String): String = if (com.verified.incar.core.VehicleFoc
     "PHONE_LINK" -> "차주 휴대폰 알림"
     "TRIAL" -> "예시 차량 체험"
     "EV_ROUTE" -> "전기차 경로"; "VALET_WATCH" -> "발레 감시"; "RADIO_DIAG" -> "무선 연결 진단"
-    "NOTICE" -> "보낸 알림"; "SETTINGS" -> "설정"; "SEARCH" -> "검색"; else -> id
+    "NOTICE" -> "보낸 알림"; "SETTINGS" -> "설정"; "SEARCH" -> "검색"; else -> if (id.startsWith("RECORD_")) "맡김 기록" else id
 }
 
 /** 출발지·도착지·알림·정비 이력처럼 차주의 생활이 드러나는 화면. */
-private val PRIVATE_SCREENS = setOf(Module.TRIP.name, Module.COMFORT.name, "NOTICE", "INSIGHT", "SERVICE", "HAND_SERVICE", "HAND_LEND", "KEY", "WALLET", "HISTORY", "VEHICLE_VIEW")
+private val PRIVATE_SCREENS = setOf(Module.TRIP.name, Module.COMFORT.name, "NOTICE", "INSIGHT", "SERVICE", "HAND_SERVICE", "HAND_LEND", "KEY", "WALLET", "HISTORY", "VEHICLE_VIEW", "CONTROL_HISTORY")
 private fun needsOwner(id: String, handedOver: Boolean) =
     id == "SETTINGS" || id == "CAR_SETUP" || id == "PHONE_LINK" ||
-        (handedOver && (id in PRIVATE_SCREENS || com.verified.incar.core.VehicleFocus.fromRoute(id) != null))
+        (handedOver && (id in PRIVATE_SCREENS || id.startsWith("RECORD_") || com.verified.incar.core.VehicleFocus.fromRoute(id) != null))
 
 /** 켜져 있어야 엔진이 판정하는 기능(VerdictEngine.update의 on() 검사와 같게 유지). */
 private val JUDGED = setOf(Module.DRIVER, Module.TRIP, Module.SCHOOL, Module.CHAUFFEUR, Module.TRUNK)
@@ -191,7 +196,9 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
             }
             val previous = stack.indexOf(target)
             setPath(when {
-                rootTab -> listOf(target)
+                // 기록 탭은 어디서 열든 탭으로 연다(이력서 링크로 열어도 뒤로 가기 화살표가 생기지 않게).
+                // 제어는 상황별 기능에서 열고 돌아오는 흐름이 있어 기존대로 쌓는다
+                rootTab || target == Root.HISTORY.name -> listOf(target)
                 previous >= 0 -> stack.take(previous + 1)
                 else -> stack + target
             })
@@ -206,7 +213,8 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
     // 잠금이 다시 걸리면(대리·빌려주기 시작, 5분 지남) 이미 열려 있던 차주 전용 화면도 닫는다
     LaunchedEffect(u.ownerUnlocked, handedOver) {
         if (!u.ownerUnlocked) {
-            setPath(stack.filterNot { needsOwner(it, handedOver) }.ifEmpty { listOf("HOME") })
+            // 잠금으로 닫는 화면의 저장 상태는 지우지 않는다. 카메라에서 돌아오던 사진·입력 중 메모는 차주가 PIN을 넣고 다시 열 때 이어 받는다
+            stack = ArrayList(stack.filterNot { needsOwner(it, handedOver) }.ifEmpty { listOf("HOME") })
             showSim = false
         }
     }
@@ -221,6 +229,18 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
         }
     }
     C.dark = C.forceDark ?: isSystemInDarkTheme()
+    // Android 15+의 투명 시스템 바에서도 밝은 배경 위 시계·아이콘이 사라지지 않게 한다.
+    // Android 10~14는 시스템 바가 테마 기본색(회색 상태바·검은 내비게이션 바)으로 칠해지므로 흰 아이콘을 그대로 둔다
+    val systemBarView = androidx.compose.ui.platform.LocalView.current
+    val systemBarWindow = androidx.activity.compose.LocalActivity.current?.window
+    androidx.compose.runtime.SideEffect {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM) systemBarWindow?.let { window ->
+            androidx.core.view.WindowCompat.getInsetsController(window, systemBarView).apply {
+                isAppearanceLightStatusBars = !C.dark
+                isAppearanceLightNavigationBars = !C.dark
+            }
+        }
+    }
     // 시뮬레이터는 개발(debug) 빌드에서만 버튼으로 보이고, 제출용 빌드에서는 로고를 길게 눌러야 열린다
     val debuggable = (LocalContext.current.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     val nav by vm.navigate.collectAsState()
@@ -238,7 +258,7 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
     androidx.compose.material3.ProvideTextStyle(androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = if (phone) com.verified.incar.ui.VerifiedSansPhone else VerifiedSans).let {
         if (phone) it.copy(lineHeight = androidx.compose.ui.unit.TextUnit(1.4f, androidx.compose.ui.unit.TextUnitType.Em)) else it
     }) {
-    Column(Modifier.fillMaxSize().background(C.bg).safeDrawingPadding()) {
+    Column(Modifier.fillMaxSize().background(C.backdrop).safeDrawingPadding()) {
         AppBar(u, titleOf(tab), tab == "HOME", stack.size > 1 && !restricted, back, showSim, debuggable, {
             when {
                 showSim -> showSim = false
@@ -247,13 +267,18 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
                 else -> vm.ownerOnly { showSim = true }
             }
         }, { go("NOTICE") }, { go("MYPAGE") }, { go("SETTINGS") })
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (restricted) Restricted(u, u.drivingLines)
+        // 차 디스플레이는 하단 탭 대신 운전석 쪽(왼쪽) 세로 메뉴로 세로 공간을 아낀다
+        val carScreen = com.verified.incar.ui.isCarScreen()
+        Row(Modifier.weight(1f).fillMaxWidth()) {
+        if (carScreen && !restricted && u.settings.onboarded) com.verified.incar.ui.NavRail(selectedRoot) { navigate(it, rootTab = true) }
+        Box(Modifier.weight(1f).fillMaxHeight()) {
+            if (restricted) Restricted(u, u.drivingLines, onDemoStop = vm::stopDemoDriving)
+            // 잠긴 차주 화면은 저장 칸 밖에서 비운다. 칸째 빠져야 입력·카메라 대기 상태가 저장되고, PIN 뒤 다시 열면 이어진다
+            else if (u.settings.onboarded && !u.ownerUnlocked && needsOwner(tab, handedOver)) Unit
             else pageState.SaveableStateProvider(tab) {
               Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                 when {
                     !u.settings.onboarded -> Onboarding(vm, u)
-                    !u.ownerUnlocked && needsOwner(tab, handedOver) -> Unit
                     vehicleFocus != null -> com.verified.incar.ui.VehicleExplorer(vm, u, go, vehicleFocus)
                     else -> when (tab) {
                         Module.VALET.name -> ValetScreen(vm, u)
@@ -268,6 +293,7 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
                         Module.COMFORT.name -> ComfortScreen(vm, u)
                         "SHOP" -> ShopMH(vm, u, go)
                         "CONTROL" -> ControlMH(vm, u, go)
+                        "CONTROL_HISTORY" -> com.verified.incar.ui.ControlHistory(u)
                         "VEHICLE_VIEW" -> com.verified.incar.ui.VehicleExplorer(vm, u, go)
                         "VERIFIED" -> VerifiedMH(u, modules, go)
                         "MYPAGE" -> MyPageMH(u, modules, go)
@@ -290,7 +316,9 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
                         "EV_ROUTE" -> com.verified.incar.ui.EvRouteScreen()
                         "VALET_WATCH" -> com.verified.incar.ui.ValetWatchScreen()
                         "RADIO_DIAG" -> com.verified.incar.ui.RadioDiagScreen()
-                        else -> HomeMH(vm, u, (if (comfortOn) listOf(Module.COMFORT) else emptyList()) + modules.filter { it in u.settings.modules && it != Module.COMFORT }, go)
+                        "SIGNALS" -> com.verified.incar.ui.SignalStatusScreen(vm, u, go)
+                        else -> if (tab.startsWith("RECORD_")) com.verified.incar.ui.RecordDetailScreen(vm, u, tab.removePrefix("RECORD_").toLongOrNull() ?: 0L, go)
+                        else HomeMH(vm, u, (if (comfortOn) listOf(Module.COMFORT) else emptyList()) + modules.filter { it in u.settings.modules && it != Module.COMFORT }, go)
                     }
                 }
               }
@@ -303,17 +331,19 @@ private fun AppContent(vm: VerifiedRuntime, phone: Boolean = false) {
             }
             if (ownerRequest != null && !restricted) OwnerPinGate(vm)
         }
-        if (u.toast.isNotEmpty() && u.toast != VerifiedRuntime.IDLE_TOAST) Row(
+        }
+        // 주행 중에는 안내줄을 띄우지 않는다(조작 잠김 화면에 누를 수 있어 보이는 줄이 남지 않게). 알림은 음성과 주행 요약으로 전한다
+        if (!restricted && u.toast.isNotEmpty() && u.toast != VerifiedRuntime.IDLE_TOAST) Row(
             Modifier.fillMaxWidth().background(C.card).padding(start = if (phone) 16.dp else 28.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(u.toast, Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }.padding(vertical = 6.dp), color = C.ink,
-                fontSize = 16.sp, maxLines = if (restricted) 2 else Int.MAX_VALUE, overflow = TextOverflow.Ellipsis)
-            if (!restricted) androidx.compose.material3.IconButton(onClick = { vm.toast(VerifiedRuntime.IDLE_TOAST) }, modifier = Modifier.size(48.dp)) {
+                fontSize = 16.sp, overflow = TextOverflow.Ellipsis)
+            androidx.compose.material3.IconButton(onClick = { vm.toast(VerifiedRuntime.IDLE_TOAST) }, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Outlined.Close, "안내 닫기", tint = C.sub)
             }
         }
-        if (!restricted && u.settings.onboarded) BottomNav(selectedRoot) { navigate(it, rootTab = true) }
+        if (!carScreen && !restricted && u.settings.onboarded) BottomNav(selectedRoot) { navigate(it, rootTab = true) }
     }
     }
 }
@@ -326,9 +356,12 @@ private fun AppBar(
     toggleSim: () -> Unit, openNotice: () -> Unit, openMyPage: () -> Unit, openSettings: () -> Unit,
 ) {
     val compact = com.verified.incar.ui.isCompact()
+    val config = androidx.compose.ui.platform.LocalConfiguration.current
+    val shortPhone = config.smallestScreenWidthDp < 600 && config.screenWidthDp > config.screenHeightDp && config.screenHeightDp < 480
     val restricted = u.signals.uxRestricted
     Row(
-        Modifier.fillMaxWidth().background(C.bg).padding(horizontal = if (compact) 12.dp else 24.dp, vertical = 4.dp),
+        Modifier.fillMaxWidth().background(C.bg.copy(alpha = 0.94f)).heightIn(min = if (shortPhone) 56.dp else if (compact) 68.dp else 76.dp)
+            .padding(horizontal = if (compact || shortPhone) 12.dp else 26.dp, vertical = if (shortPhone) 0.dp else 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (canBack) androidx.compose.material3.IconButton(onClick = back, modifier = Modifier.size(48.dp)) {
@@ -340,22 +373,22 @@ private fun AppBar(
         else Modifier
         Text(
             if (restricted) "주행 중" else title, Modifier.weight(1f).then(logo).padding(start = if (canBack) 0.dp else 4.dp),
-            color = C.ink, fontWeight = FontWeight.Bold, fontSize = if (compact) 21.sp else 24.sp,
-            maxLines = 2, overflow = TextOverflow.Ellipsis,
+            color = C.title, fontWeight = FontWeight.Bold, fontSize = 30.sp,
+            maxLines = if (compact && canBack) 4 else 2, overflow = TextOverflow.Ellipsis,
         )
         if (u.signals.audioFocusLost) Icon(Icons.AutoMirrored.Outlined.VolumeOff, "순정 오디오 우선", tint = C.sub)
         if (u.simAllowed && !u.carConnected && !isHome && (compact || !simButton))
-            Text(if (u.trial) "체험" else "시연", Modifier.padding(horizontal = 4.dp), color = C.sub, fontSize = 15.sp)
-        if (u.simAllowed && (simButton || showSim)) {
+            Text(if (u.trial) "체험" else "시연", Modifier
+                .background(C.chip, androidx.compose.foundation.shape.CircleShape).padding(horizontal = 10.dp, vertical = 6.dp),
+                color = C.title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+        if (u.simAllowed && ((simButton && !(compact && canBack)) || showSim)) {
             val label = if (showSim) "시뮬레이터 닫기" else "신호 시뮬레이터"
-            if (compact) androidx.compose.material3.IconButton(onClick = toggleSim, modifier = Modifier.size(48.dp)) {
+            androidx.compose.material3.IconButton(onClick = toggleSim, modifier = Modifier.size(48.dp).testTag("sim_toggle")) {
                 Icon(if (showSim) Icons.Outlined.Close else Icons.Outlined.Tune, label, tint = C.sub)
-            } else androidx.compose.material3.TextButton(onClick = toggleSim, modifier = Modifier.heightIn(min = 48.dp)) {
-                Text(label, fontSize = 16.sp, color = C.sub)
             }
         }
         if (canBack) {
-            if (title != "설정") androidx.compose.material3.IconButton(onClick = openSettings, modifier = Modifier.size(48.dp)) {
+            if (!compact && title != "설정") androidx.compose.material3.IconButton(onClick = openSettings, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Outlined.Settings, "설정", tint = C.ink)
             }
         } else if (u.settings.onboarded) {
@@ -364,7 +397,7 @@ private fun AppBar(
             }
         }
     }
-    HorizontalDivider(color = C.line)
+    HorizontalDivider(color = C.line.copy(alpha = 0.5f))
 }
 
 /** 앰비언트 조명 제어 결과를 화면 양 끝 막대로 보여 준다 (실차에서는 실내 조명이 같은 색으로 켜진다). */

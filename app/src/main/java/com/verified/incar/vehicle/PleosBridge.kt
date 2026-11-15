@@ -45,7 +45,8 @@ class PleosBridge(
 ) {
     /** 실제로 값을 한 번이라도 받은 신호 이름(구독 성공이 아니라 수신 기준). SDK 콜백 스레드에서 더해진다. */
     val live: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private var vehicle: Vehicle? = null
+    // SDK 콜백(바인더 스레드)이 끊긴 연결인지 확인하므로 volatile
+    @Volatile private var vehicle: Vehicle? = null
     val connected get() = vehicle != null
     private val offs = mutableListOf<() -> Unit>()
     private val doorOpen = ConcurrentHashMap<DoorValue, Boolean>()
@@ -77,16 +78,21 @@ class PleosBridge(
     }
 
     fun disconnect() {
+        // 먼저 끊어, 늦게 도착한 콜백이 끊긴 연결의 값을 다시 '받음'으로 남기지 않게 한다
+        val v = vehicle
+        vehicle = null
         offs.forEach { runCatching(it) }
         offs.clear()
-        runCatching { vehicle?.release() }
-        vehicle = null
+        runCatching { v?.release() }
+        // 끊긴 연결에서 받은 값을 지금 받은 값으로 보지 않는다(CarBridge.clearSubscriptions와 같은 기준)
+        val stale = live.toSet()
         live.clear()
         listOf(doorOpen, doorLocked, windowOpen, occupied, belted).forEach { it.clear() }
+        if (stale.isNotEmpty()) signals.update { it.copy(seenAt = it.seenAt - stale) }
     }
 
     private fun put(name: String, apply: (Signals) -> Signals) {
-        if (paused()) return
+        if (paused() || vehicle == null) return
         live += name
         runCatching { signals.update { s -> apply(s).let { it.copy(seenAt = it.seenAt + (name to clock())) } } }
     }
@@ -213,7 +219,7 @@ class PleosBridge(
     }
 
     private fun readArea(channel: DetailChannel, areaId: Int, value: Boolean?) {
-        if (!paused()) signals.update { it.recordArea(channel, areaId, value, clock()) }
+        if (!paused() && vehicle != null) signals.update { it.recordArea(channel, areaId, value, clock()) }
     }
 
     private fun doorId(area: DoorValue) = when (area) {

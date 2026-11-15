@@ -72,6 +72,14 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <uses-library android:name="android.car" android:required="false" />
+        <!-- 맡김 사진 원본 촬영: 카메라 앱이 캐시의 camera/ 칸에만 쓴다 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
         <service
             android:name=".MonitorService"
             android:exported="false"
@@ -89,6 +97,8 @@
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- 업데이트 설치로 끝난 감시를 다시 시작한다(자기 패키지에만 오는 시스템 방송) -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
         <!-- 폰은 사용자의 자동 회전을 따른다(세로로 시작). 차(AAOS)는 MainActivity가 가로로 고정한다. 좁은 화면은 한 단으로 쌓인다 -->

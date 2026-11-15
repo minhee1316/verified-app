@@ -37,7 +37,9 @@ class DemoScreensTest {
         rule.mainClock.autoAdvance = false
         rule.setContent { MaterialTheme { App(vm) } }
         idle()
-        tap("demo_$route")
+        // 미리보기 화면은 홈 카드가 아니라 화면 경로로 연다(개발용 신호 패널과 같은 경로)
+        vm.navigate.value = route
+        idle()
     }
 
     private fun idle() = repeat(4) { rule.mainClock.advanceTimeBy(400); rule.waitForIdle() }

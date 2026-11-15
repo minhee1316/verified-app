@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertContentDescriptionContains
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -38,7 +39,8 @@ class VehicleExplorerTest {
     private fun start(release: Boolean = false) {
         val app = RuntimeEnvironment.getApplication()
         if (release) app.applicationInfo.flags = app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
-        vm = VerifiedRuntime(app, simTicker = false)
+        vm = if (release) VerifiedRuntime(app, false, PhoneRelay::publish) { _, _ -> ConnectedWithoutReadings() }
+        else VerifiedRuntime(app, simTicker = false)
         vm.settings { it.copy(personas = Persona.entries.toSet(), carModel = CarModel.GRANDEUR) }
         rule.setContent { MaterialTheme { App(vm) } }
         rule.waitForIdle()
@@ -48,7 +50,10 @@ class VehicleExplorerTest {
     }
 
     private fun tap(tag: String) {
-        rule.onNodeWithTag(tag).performScrollTo().performClick()
+        // 차종은 가로 목록이다. 먼저 바깥 세로 목록에서 차종 행을 보이게 한 뒤
+        // 가로 스크롤과 실제 터치를 검사한다(performScrollTo는 가장 가까운 스크롤을 사용).
+        if (tag.startsWith("explorer_model_")) rule.onNodeWithTag("explorer_models").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithTag(tag).performScrollTo().assertIsDisplayed().performClick()
         rule.waitForIdle()
     }
 
@@ -80,6 +85,7 @@ class VehicleExplorerTest {
         assertTrue(vm.ui.value.signals.row2Seated)
         assertFalse(vm.ui.value.signals.row2Belt)
         assertFalse(vm.ui.value.signals.doorsLocked)
+        tap("explorer_tab_seats")
         shot("72_폰_차량360_좌석잠금", "explorer_seats")
         tap("explorer_model_TUCSON")
         assertEquals(CarModel.TUCSON, vm.ui.value.settings.carModel)
@@ -87,8 +93,9 @@ class VehicleExplorerTest {
         vm.close()
     }
 
-    @Test fun unconnectedReleaseDoesNotInventLocationsOrApplyClimate() {
+    @Test fun connectedReleaseDoesNotInventMissingReadingsOrApplyUnapprovedClimate() {
         start(release = true)
+        tap("explorer_tab_seats")
         rule.onNodeWithTag("explorer_seat_DRIVER").assertExists()
         assertEquals(null, vm.ui.value.signals.details.occupied[SeatPart.DRIVER])
         tap("explorer_interior")

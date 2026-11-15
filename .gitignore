@@ -27,3 +27,9 @@ screenshots/
 
 # 내부 작업 지침(로컬 전용)
 작업지침_AGENTS.md
+CLAUDE_검토요청.md
+# 검증 원본(기기 덤프·로그)은 로컬에만 둔다. 요약은 검증_보고서.md
+검증/
+
+# 타사 앱 참고 화면은 저장소에 올리지 않는다
+assets/branding/myhyundai_control_reference.png

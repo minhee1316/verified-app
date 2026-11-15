@@ -1,5 +1,10 @@
 package com.verified.incar.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.automirrored.outlined.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -64,15 +70,14 @@ val VerifiedSans = androidx.compose.ui.text.font.FontFamily(
 )
 
 /**
- * 폰용 같은 글꼴: 차 화면(멀리서 보는 큰 화면)에 맞춘 굵기가 폰에서는 너무 두꺼워 한두 단계씩 가늘게 그린다.
- * 코드의 fontWeight는 그대로 두고 굵기 파일만 바꿔 끼우므로 차 화면 모습은 바뀌지 않는다.
+ * 폰에서도 제목·상태의 굵기를 유지한다. 크기만 PhoneText로 조정해 시각적 위계를 보존한다.
  */
 val VerifiedSansPhone = androidx.compose.ui.text.font.FontFamily(
     androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_regular, FontWeight.Normal),
-    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_regular, FontWeight.Medium),
-    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_medium, FontWeight.SemiBold),
-    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_semibold, FontWeight.Bold),
-    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_semibold, FontWeight.ExtraBold),
+    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_medium, FontWeight.Medium),
+    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_semibold, FontWeight.SemiBold),
+    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_bold, FontWeight.Bold),
+    androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_extrabold, FontWeight.ExtraBold),
     androidx.compose.ui.text.font.Font(com.verified.incar.R.font.verified_sans_bold, FontWeight.Black),
 )
 
@@ -83,7 +88,7 @@ object C {
     private fun pick(day: Long, night: Long) = Color(if (dark) night else day)
 
     /** 채움(버튼·배지) 브랜드색 */
-    val navy get() = pick(0xFF002C5F, 0xFF1F5FAF)
+    val navy get() = pick(0xFF002C5F, 0xFF174C80)
     /** 글자 강조색. 밤에는 어두운 바탕에서 읽히도록 밝힌다 */
     val title get() = pick(0xFF002C5F, 0xFF9CC8FF)
     val deep = Color(0xFF001E42)
@@ -91,12 +96,14 @@ object C {
     val action get() = pick(0xFF195FAB, 0xFF9BC6FF)
     /** 고른 칩 바탕 */
     val ice get() = pick(0xFFE6EEF8, 0xFF1E3354)
-    val bg get() = pick(0xFFFFFFFF, 0xFF0B1220)
-    val card get() = pick(0xFFF6F7F9, 0xFF162033)
-    val chip get() = pick(0xFFE9ECF1, 0xFF1F2B40)
-    val ink get() = pick(0xFF111827, 0xFFE5ECF5)
-    val sub get() = pick(0xFF525F70, 0xFFB2BDCD)
-    val line get() = pick(0xFFE7EAEE, 0xFF2A3850)
+    val bg get() = pick(0xFFF2F3F6, 0xFF191C24)
+    val card get() = pick(0xFFFFFFFF, 0xFF30333E)
+    val chip get() = pick(0xFFEEF1F5, 0xFF303C4A)
+    val ink get() = pick(0xFF101923, 0xFFF3F5F8)
+    val sub get() = pick(0xFF606975, 0xFFB7BDC7)
+    val line get() = pick(0xFFDDE0E6, 0xFF434A57)
+    val surface get() = Brush.linearGradient(if (dark) listOf(Color(0xFF3C404C), Color(0xFF272A34)) else listOf(Color.White, Color(0xFFFEFEFF)))
+    val backdrop get() = Brush.verticalGradient(if (dark) listOf(Color(0xFF2B2E37), Color(0xFF13161D)) else listOf(Color(0xFFF5F6F8), Color(0xFFEBEDF1)))
     /** 머리말(kicker)·보강 표시에 쓰는 청록 */
     val teal get() = pick(0xFF007FA8, 0xFF5BC0E0)
     val ok get() = pick(0xFF126647, 0xFF88DEBD)
@@ -115,13 +122,14 @@ fun levelColor(l: Level?) = when (l) {
     null -> C.sub
 }
 
-private val cardShape = RoundedCornerShape(18.dp)
+private val cardShape = RoundedCornerShape(20.dp)
 
 @Composable
 fun Card(modifier: Modifier = Modifier, padding: Dp = 28.dp, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        // 흰 바탕 위 옅은 회색 카드(테두리 없음)
-        modifier.clip(cardShape).background(C.card)
+        modifier.referenceShadow(if (C.dark) 6.dp else 12.dp)
+            .clip(cardShape).background(C.surface)
+            .border(1.dp, if (C.dark) Color.White.copy(alpha = 0.13f) else Color.White.copy(alpha = 0.9f), cardShape)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             // 폰 세로에서는 카드 안 여백을 18dp까지만(차 화면 값 28~36dp는 360dp 폰에서 글 칸을 너무 좁힌다)
             .padding(if (isCompact()) minOf(padding, 18.dp) else padding),
@@ -147,9 +155,17 @@ fun Kicker(text: String, dark: Boolean = false) =
     Text(text.uppercase(), color = if (dark) C.blue else C.teal, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, letterSpacing = 1.sp)
 
 /** 카드 머리: 머리말 · 번호 배지 + 제목 + 오른쪽 상태(알약·버튼·스위치) · 설명. */
-/** 폰처럼 좁은 화면(가로 600dp 미만). 두 단 화면을 한 단으로 쌓는다. */
+/** 큰 글씨의 짧은 가로폰도 한 단으로 배치해 두 열 안에서 단어가 쪼개지지 않게 한다. */
 @Composable
-fun isCompact() = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp < 600
+fun isCompact(): Boolean {
+    val width = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    return width < 600 || (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f && width < 900)
+}
+
+/** 차 디스플레이(AAOS의 UI 모드가 car)인지. 휴대폰을 가로로 돌린 넓은 화면과 구분한다. */
+@Composable
+fun isCarScreen() = (androidx.compose.ui.platform.LocalConfiguration.current.uiMode and
+    android.content.res.Configuration.UI_MODE_TYPE_MASK) == android.content.res.Configuration.UI_MODE_TYPE_CAR
 
 /**
  * 두 단 화면 틀. 넓은 화면(차 화면·가로)에서는 좌우 두 단, 좁은 화면(폰 세로)에서는 위아래 한 단으로 쌓는다.
@@ -168,13 +184,23 @@ fun Split(
     gap: Dp, w1: Float = 1f, w2: Float = 1f, center: Boolean = false,
     first: @Composable (Modifier) -> Unit, second: @Composable (Modifier) -> Unit,
 ) {
+    // TwoUp과 같이: 회전으로 Column↔Row가 바뀌어도 두 칸을 다시 만들지 않고 옮겨, 입력 중 메모·촬영 대상을 유지한다
+    val cellState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    val latestFirst = androidx.compose.runtime.rememberUpdatedState(first)
+    val latestSecond = androidx.compose.runtime.rememberUpdatedState(second)
+    val keptFirst = androidx.compose.runtime.remember(cellState) {
+        androidx.compose.runtime.movableContentOf { m: Modifier -> cellState.SaveableStateProvider("first") { latestFirst.value(m) } }
+    }
+    val keptSecond = androidx.compose.runtime.remember(cellState) {
+        androidx.compose.runtime.movableContentOf { m: Modifier -> cellState.SaveableStateProvider("second") { latestSecond.value(m) } }
+    }
     if (isCompact()) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
-        first(Modifier.fillMaxWidth())
-        second(Modifier.fillMaxWidth())
+        keptFirst(Modifier.fillMaxWidth())
+        keptSecond(Modifier.fillMaxWidth())
     } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap), verticalAlignment = if (center) Alignment.CenterVertically else Alignment.Top) {
         // 무게 0은 제 크기 그대로(그림·점수 원처럼)
-        first(if (w1 > 0f) Modifier.weight(w1) else Modifier)
-        second(if (w2 > 0f) Modifier.weight(w2) else Modifier)
+        keptFirst(if (w1 > 0f) Modifier.weight(w1) else Modifier)
+        keptSecond(if (w2 > 0f) Modifier.weight(w2) else Modifier)
     }
 }
 
@@ -204,9 +230,20 @@ fun TwoUp(
     tabs: Pair<String, String>? = null,
     left: @Composable () -> Unit, right: @Composable () -> Unit,
 ) {
+    // 회전은 같은 작업의 배치만 바꾼다. Row/Column 분기 사이로 내용을 옮겨도
+    // 입력·선택 상태를 유지하고, 세로 탭에서 숨긴 칸은 다시 열 때 복원한다.
+    val paneState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    val latestLeft = androidx.compose.runtime.rememberUpdatedState(left)
+    val latestRight = androidx.compose.runtime.rememberUpdatedState(right)
+    val keptLeft = androidx.compose.runtime.remember(paneState) {
+        androidx.compose.runtime.movableContentOf { paneState.SaveableStateProvider("left") { latestLeft.value() } }
+    }
+    val keptRight = androidx.compose.runtime.remember(paneState) {
+        androidx.compose.runtime.movableContentOf { paneState.SaveableStateProvider("right") { latestRight.value() } }
+    }
+    var sel by androidx.compose.runtime.saveable.rememberSaveable(tabs) { androidx.compose.runtime.mutableIntStateOf(if (rightFirst) 1 else 0) }
     if (isCompact() && tabs != null) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(inner)) {
         // 0 = 왼쪽 단, 1 = 오른쪽 단. 처음에는 먼저 보여 주기로 한 단
-        var sel by androidx.compose.runtime.saveable.rememberSaveable(tabs) { androidx.compose.runtime.mutableIntStateOf(if (rightFirst) 1 else 0) }
         val order = if (rightFirst) listOf(1 to tabs.second, 0 to tabs.first) else listOf(0 to tabs.first, 1 to tabs.second)
         Row(Modifier.fillMaxWidth().clip(btnShape).background(C.chip).padding(3.dp)) {
             order.forEach { (i, label) ->
@@ -219,15 +256,15 @@ fun TwoUp(
                 ) { Text(label, color = if (on) C.title else C.sub, fontSize = 16.sp, fontWeight = if (on) FontWeight.Bold else FontWeight.Medium, textAlign = TextAlign.Center) }
             }
         }
-        if (sel == 0) left() else right()
+        if (sel == 0) keptLeft() else keptRight()
     } else if (isCompact()) Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(inner)) {
-        if (rightFirst) { right(); left() } else { left(); right() }
+        if (rightFirst) { keptRight(); keptLeft() } else { keptLeft(); keptRight() }
     } else Row(
         Modifier.fillMaxWidth().padding(horizontal = hPad, vertical = vPad), horizontalArrangement = Arrangement.spacedBy(gap),
         verticalAlignment = if (top) Alignment.Top else Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(leftWeight), verticalArrangement = Arrangement.spacedBy(inner)) { left() }
-        Column(Modifier.weight(1f).padding(top = rightTop), verticalArrangement = Arrangement.spacedBy(inner)) { right() }
+        Column(Modifier.weight(leftWeight), verticalArrangement = Arrangement.spacedBy(inner)) { keptLeft() }
+        Column(Modifier.weight(1f).padding(top = rightTop), verticalArrangement = Arrangement.spacedBy(inner)) { keptRight() }
     }
 }
 
@@ -266,7 +303,7 @@ fun Pill(text: String, level: Level?, big: Boolean = false) {
     val c = levelColor(level)
     Text(
         text, color = c, fontWeight = FontWeight.Bold, fontSize = if (big) 18.sp else 15.sp,
-        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(c.copy(alpha = 0.08f))
+        modifier = Modifier.clip(CircleShape).background(c.copy(alpha = 0.10f))
             .padding(horizontal = if (big) 12.dp else 9.dp, vertical = if (big) 6.dp else 4.dp),
     )
 }
@@ -298,7 +335,7 @@ fun CheckLine(ok: Boolean?, label: String, value: String? = null, divider: Boole
 @Composable
 fun CheckRow(ok: Boolean, label: String, value: String) = CheckLine(ok, label, value)
 
-private val btnShape = RoundedCornerShape(12.dp)
+private val btnShape = RoundedCornerShape(16.dp)
 
 /** SOFT_OK·SOFT_DANGER: 옅은 초록·빨강 바탕의 보조 버튼(완료 확인·종료처럼 결과가 갈리는 동작). */
 enum class BtnStyle { FILLED, OUTLINE, TONAL, CYAN, ACTION, SOFT_OK, SOFT_DANGER }
@@ -327,14 +364,16 @@ fun BigButton(
         else -> null
     }
     Box(
-        modifier.clip(btnShape).background(bg)
+        modifier
+            .shadow(if (enabled && style == BtnStyle.FILLED) 5.dp else 0.dp, btnShape, clip = false)
+            .clip(btnShape).background(if (enabled && style == BtnStyle.FILLED) Tone.navy else androidx.compose.ui.graphics.SolidColor(bg))
             .then(if (edge != null && enabled) Modifier.border(1.dp, edge, btnShape) else Modifier)
             // 되돌릴 수 없는 확정(대리 끝내기·반납)은 길게 눌러야 한다(Toyota 앱의 길게 눌러 실행)
             .then(
                 if (onLongClick != null) Modifier.combinedClickable(enabled = enabled, role = Role.Button, onLongClickLabel = "확정", onLongClick = onLongClick, onClick = onClick)
                 else Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onClick),
             )
-            .widthIn(min = 48.dp).heightIn(min = if (isCompact()) 48.dp else 56.dp)
+            .widthIn(min = 48.dp).heightIn(min = if (isCompact()) 54.dp else 60.dp)
             .padding(horizontal = if (isCompact()) 15.dp else 22.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) { Text(text, color = fg, fontWeight = FontWeight.Bold, fontSize = fontSize, textAlign = TextAlign.Center) }
@@ -348,7 +387,7 @@ fun Btn(text: String, modifier: Modifier = Modifier, primary: Boolean = true, en
 fun Chip(text: String, selected: Boolean?, modifier: Modifier = Modifier, big: Boolean = false, enabled: Boolean = true, onClick: () -> Unit) {
     // selected가 null이면 동작 칩(버튼으로만 읽힘), 아니면 고르는 칩(선택 상태까지 읽힘)
     val on = selected == true
-    val shape = RoundedCornerShape(9.dp)
+    val shape = RoundedCornerShape(50)
     Box(
         modifier.clip(shape).background(if (on) C.ice else C.card)
             .border(1.dp, if (on) C.title else C.line, shape)
@@ -364,7 +403,7 @@ fun Note(text: String, level: Level? = Level.INFO) {
     val c = levelColor(level)
     Text(
         text, color = c, fontSize = 16.sp, lineHeight = 23.sp,
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(c.copy(alpha = 0.07f))
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(c.copy(alpha = 0.08f))
             .padding(horizontal = 14.dp, vertical = 12.dp),
     )
 }
@@ -399,22 +438,20 @@ fun Wrap(spacing: Dp = 8.dp, content: @Composable RowScope.() -> Unit) {
     ) { content() }
 }
 
-/** ⑤ 재출발 속도 게이지: 0~50km/h 반원. */
+/** ⑤ 재출발 속도 게이지. 호·눈금·제한 표시가 같은 정사각형 좌표계를 쓴다. */
 @Composable
 fun SpeedGauge(speed: Float, limit: Float, size: Dp = 300.dp, content: @Composable ColumnScope.() -> Unit) {
-    Box(Modifier.size(size, size * 0.82f), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(size)) {
-            val w = this.size.width * 0.07f
-            val inset = w / 2 + 4f
-            val arc = Size(this.size.width - inset * 2, this.size.height - inset * 2)
-            drawArc(C.line, 135f, 270f, false, Offset(inset, inset), arc, style = Stroke(w, cap = StrokeCap.Round))
-            val v = (speed / 50f).coerceIn(0f, 1f)
-            drawArc(
-                if (speed <= limit) C.title else C.warn,
-                135f, 270f * v, false, Offset(inset, inset), arc, style = Stroke(w, cap = StrokeCap.Round),
-            )
+    BoxWithConstraints(Modifier.widthIn(max = size).fillMaxWidth().testTag("school_gauge")) {
+        val gaugeStroke = maxWidth * 0.055f
+        Box(Modifier.fillMaxWidth().aspectRatio(1f), contentAlignment = Alignment.Center) {
+                GaugeTrack(
+                    fraction = speed / 50f, marker = limit / 50f, ticks = 10,
+                    modifier = Modifier.fillMaxSize(), stroke = gaugeStroke,
+                    color = Brush.linearGradient(if (speed <= limit) listOf(Color(0xFF26BC94), Color(0xFF087B66))
+                        else listOf(Color(0xFFF6A03C), Color(0xFFD15A1C))),
+                )
+                Column(Modifier.fillMaxWidth(0.76f), horizontalAlignment = Alignment.CenterHorizontally, content = content)
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, content = content)
     }
 }
 
@@ -423,10 +460,9 @@ fun SpeedGauge(speed: Float, limit: Float, size: Dp = 300.dp, content: @Composab
 fun GradientProgress(progress: Float, modifier: Modifier = Modifier) {
     val fraction = progress.coerceIn(0f, 1f)
     Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Box(Modifier.weight(1f).height(8.dp).clip(CircleShape).background(C.line)) {
-            Box(Modifier.fillMaxWidth(fraction).height(8.dp).background(C.title))
+        Box(Modifier.weight(1f).height(14.dp).clip(CircleShape).background(C.line)) {
+            Box(Modifier.fillMaxWidth(fraction).height(14.dp).clip(CircleShape).background(Tone.blueMint))
         }
-        Text("${(fraction * 100).toInt()}%", color = C.ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
     }
 }
 
@@ -452,12 +488,12 @@ val LocalPhoneText = androidx.compose.runtime.staticCompositionLocalOf { false }
 /**
  * 차 화면(멀리서 보는 1408dp 화면)에 맞춘 글자 크기를 폰 크기로 바꾸는 비선형 표.
  * 작은 글자는 조금만, 큰 제목은 많이 줄인다(Android 14 큰 글씨 비선형 배율과 같은 방식).
- * 기준: Material 3·Now in Android — 칩·버튼 14, 본문 14~16, 카드 제목 16~18, 화면 제목 22~24, 큰 숫자만 그 이상.
+ * 참고 시안의 위계: 보조 설명 14, 본문 16~20, 카드 제목 22~24, 화면 큰 제목 27~32.
  */
 object PhoneText {
     // 차 화면 sp → 폰 sp
     private val CAR = floatArrayOf(10f, 12f, 14f, 16f, 18f, 20f, 23f, 26f, 30f, 40f, 56f, 72f, 120f)
-    private val PHONE = floatArrayOf(10f, 11.5f, 13.5f, 14.5f, 15.5f, 16.5f, 17.5f, 19f, 21f, 24f, 30f, 38f, 64f)
+    private val PHONE = floatArrayOf(10f, 12f, 14f, 16f, 18f, 20f, 22f, 24f, 27f, 32f, 42f, 50f, 88f)
     fun phoneSp(car: Float) = lerp(CAR, PHONE, car)
     fun carSp(phone: Float) = lerp(PHONE, CAR, phone)
     private fun lerp(from: FloatArray, to: FloatArray, v: Float): Float {

@@ -48,7 +48,14 @@ object Gleo {
                 Reply(function, "fail", "Please register your home location in settings first.")
             } else {
                 rt.act { _, _ -> startValet() }
-                Reply(function, "success", "Designated driver mode is ready. Please ask the driver to agree on the screen.", openTab = Module.VALET.name)
+                // 엔진이 실제로 시작했는지로 답한다(맡김 진행 중·집 미등록이면 엔진이 거절한다)
+                val e = rt.ui.value.engine
+                when {
+                    e.valet.phase == com.verified.incar.core.ValetPhase.CONSENT ->
+                        Reply(function, "success", "Designated driver mode is ready. Please ask the driver to agree on the screen.", openTab = Module.VALET.name)
+                    e.lend.active -> Reply(function, "fail", "The car is already handed over. Please end the current handover on the screen first.", openTab = Module.VALET.name)
+                    else -> Reply(function, "fail", "Please register your home location in settings first.")
+                }
             }
             START_ESCORT -> if (u.signals.uxRestricted) {
                 Reply(function, "fail", "Escort mode can be started only while the car is in park.")

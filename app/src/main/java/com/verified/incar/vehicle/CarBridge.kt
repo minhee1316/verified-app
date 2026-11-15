@@ -39,13 +39,13 @@ class CarBridge(
     private val signals: MutableStateFlow<Signals>,
     /** 판정 시계(Runtime.now). 신호를 읽은 시각을 Signals.seenAt에 남긴다. */
     private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() },
-) {
-    var connected = false
+) : VehicleSignalSource {
+    override var connected = false
         private set
-    var caps = Capabilities()
+    override var caps = Capabilities()
         private set
     /** 실차에서 받아 오는 신호 이름. 화면에 '실차' 표시를 붙이는 데 쓴다. */
-    val live = mutableSetOf<String>()
+    override val live = mutableSetOf<String>()
 
     private var car: Car? = null
     private var pm: CarPropertyManager? = null
@@ -61,10 +61,42 @@ class CarBridge(
     private val windowOpen = mutableMapOf<Int, Boolean>()
     private val postureAxes = mutableMapOf<Int, Float>()
     /** 재생 중인 시연 시나리오 수. 0보다 크면 차 신호를 넣지 않는다(콜백·코루틴 모두 메인 스레드). */
-    var paused = 0
+    override var paused = 0
     private var grantedAtConnect = emptySet<String>()
     private val main = Handler(Looper.getMainLooper())
     private val hazardOff = Runnable { signals.update { it.copy(hazardOn = false) } }
+    private var connectionListener: (Boolean) -> Unit = {}
+    private var connectionGeneration = 0
+    private var subscriptionGeneration = 0
+    private var waitingForRuntime = false
+    private val pendingReadings = mutableListOf<(Signals) -> Signals>()
+
+    override fun setConnectionListener(listener: (Boolean) -> Unit) {
+        connectionListener = listener
+    }
+
+    private fun notifyConnection(generation: Int) {
+        // Car.createCar는 서비스가 이미 준비됐으면 콜백을 즉시 부른다. Runtime 생성 도중 재진입하지 않는다.
+        val ready = connected
+        val subscription = subscriptionGeneration
+        main.post {
+            if (generation != connectionGeneration || subscription != subscriptionGeneration) return@post
+            connectionListener(ready)
+            if (ready && connected) {
+                waitingForRuntime = false
+                val readings = pendingReadings.toList()
+                pendingReadings.clear()
+                // 실차 저장소·미수신 기본값 전환 뒤에만 초기 실제 신호를 반영한다.
+                signals.update { initial ->
+                    readings.fold(initial) { current, reading -> runCatching { reading(current) }.getOrDefault(current) }
+                }
+            }
+        }
+    }
+
+    private fun updateSignals(reading: (Signals) -> Signals) {
+        if (waitingForRuntime) pendingReadings += reading else signals.update(reading)
+    }
 
     private fun granted() = RUNTIME_PERMISSIONS.filter { ctx.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }.toSet()
 
@@ -72,15 +104,41 @@ class CarBridge(
      * 연결한 뒤 차 권한을 새로 받았으면 구독을 다시 건다. 권한 없이 실패한 구독은 나중에 허용돼도 살아나지 않고,
      * 옛 CarPropertyManager는 권한으로 거른 속성 목록을 들고 있어 Car를 새로 만든다. 다시 연결했으면 true.
      */
-    fun resubscribeIfGranted(): Boolean {
+    override fun resubscribeIfGranted(): Boolean {
         if (!connected || granted() == grantedAtConnect) return false
         disconnect()
         return connect()
     }
 
-    fun connect(): Boolean {
+    override fun connect(): Boolean {
         if (!ctx.packageManager.hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE)) return false
-        val c = runCatching { Car.createCar(ctx) }.getOrNull() ?: return false
+        if (car != null) return connected
+        val generation = ++connectionGeneration
+        val created = runCatching {
+            Car.createCar(ctx, main, Car.CAR_WAIT_TIMEOUT_DO_NOT_WAIT) { source, ready ->
+                if (generation != connectionGeneration) return@createCar
+                car = source
+                if (ready) {
+                    waitingForRuntime = true
+                    if (!connected && !runCatching { subscribe(source) }.getOrDefault(false)) {
+                        // 매니저 초기화 실패로 남은 연결도 반드시 해제한다.
+                        disconnect()
+                        notifyConnection(connectionGeneration)
+                        return@createCar
+                    }
+                } else {
+                    clearSubscriptions()
+                }
+                notifyConnection(generation)
+            }
+        }.getOrNull() ?: return false
+        // 동기 콜백에서 초기화 실패로 disconnect한 경우 방금 해제한 Car를 되살리지 않는다.
+        if (generation == connectionGeneration) car = created
+        return connected
+    }
+
+    /** 서비스가 준비됐거나 재시작된 뒤 매니저·구독을 새로 만든다. */
+    private fun subscribe(c: Car): Boolean {
         val m = runCatching { c.getCarManager(Car.PROPERTY_SERVICE) as CarPropertyManager }.getOrNull() ?: return false
         car = c
         pm = m
@@ -88,7 +146,10 @@ class CarBridge(
         // 주행 중 화면 제한은 시스템이 정한 CarUxRestrictions를 따른다
         runCatching {
             val ux = c.getCarManager(Car.CAR_UX_RESTRICTION_SERVICE) as CarUxRestrictionsManager
-            fun apply(r: CarUxRestrictions?) = signals.update { it.copy(systemUxRestricted = r?.isRequiresDistractionOptimization == true) }
+            val generation = subscriptionGeneration
+            fun apply(r: CarUxRestrictions?) {
+                if (generation == subscriptionGeneration) updateSignals { it.copy(systemUxRestricted = r?.isRequiresDistractionOptimization == true) }
+            }
             apply(ux.currentCarUxRestrictions)
             ux.registerListener { apply(it) }
             uxManager = ux
@@ -100,7 +161,7 @@ class CarBridge(
         sub("ignition", VehiclePropertyIds.IGNITION_STATE) { s, v -> s.copy(ignitionOn = (v.value as Int) >= 4) }
         sub("steering", VehiclePropertyIds.PERF_STEERING_ANGLE, 1f) { s, v -> s.copy(steeringDeg = v.value as Float) }
         // 첫 변경 이벤트 전까지 시뮬레이터 기본값이 주행거리로 쓰이지 않게 한 번 읽어 둔다
-        runCatching { m.getFloatProperty(VehiclePropertyIds.PERF_ODOMETER, 0) }.onSuccess { km -> signals.update { it.copy(odometerKm = km.toDouble()) } }
+        runCatching { m.getFloatProperty(VehiclePropertyIds.PERF_ODOMETER, 0) }.onSuccess { km -> updateSignals { it.copy(odometerKm = km.toDouble()) } }
         sub("odometer", VehiclePropertyIds.PERF_ODOMETER, 1f) { s, v -> s.copy(odometerKm = (v.value as Float).toDouble()) }
         // 하이브리드도 EV 용량을 주므로 연료 탱크가 있으면 연료 잔량을 쓴다(구동 배터리를 '배터리·연료'로 보지 않게)
         val fuelMl = runCatching { m.getFloatProperty(VehiclePropertyIds.INFO_FUEL_CAPACITY, 0) }.getOrDefault(0f)
@@ -197,7 +258,7 @@ class CarBridge(
         sub("cruise", VehiclePropertyIds.CRUISE_CONTROL_STATE) { s, v -> s.copy(cruiseOverride = (v.value as Int) in 3..4) }
 
         runCatching { m.getProperty(String::class.java, VehiclePropertyIds.INFO_MODEL, 0).value }.getOrNull()?.let { name ->
-            signals.update { it.copy(modelName = name) }
+            updateSignals { it.copy(modelName = name) }
         }
         // HVAC_SEAT_TEMPERATURE: 양수 = 열선 단계, 음수 = 통풍 단계 (영역별)
         val seatTemp = sub("seatHeat", VehiclePropertyIds.HVAC_SEAT_TEMPERATURE) { s, v ->
@@ -251,22 +312,40 @@ class CarBridge(
         return true
     }
 
-    fun disconnect() {
+    override fun disconnect() {
+        ++connectionGeneration
+        val previousCar = car
+        car = null
+        clearSubscriptions()
+        runCatching { previousCar?.disconnect() }
+    }
+
+    /** 연결이 끊기면 마지막 값을 현재 수신 값으로 취급하지 않고 다음 서비스 연결을 기다린다. */
+    private fun clearSubscriptions() {
+        connected = false
+        ++subscriptionGeneration
+        waitingForRuntime = false
+        pendingReadings.clear()
+        val staleReadings = live.toSet() + setOf("trunk", "lockStatus", "windowStatus", "driverSeat")
         callbacks.forEach { cb -> runCatching { pm?.unregisterCallback(cb) } }
         callbacks.clear()
         runCatching { uxManager?.unregisterListener() }
-        runCatching { car?.disconnect() }
+        pm = null
+        uxManager = null
         main.removeCallbacks(hazardOff)
         live.clear()
         readers.clear()
+        lastRefresh.clear()
         doorOpen.clear()
         doorLocked.clear()
         windowOpen.clear()
         occupied.clear()
         belted.clear()
-        signals.update { it.copy(details = VehicleDetails()) }
-        signals.update { it.copy(seenAt = it.seenAt - setOf("trunk", "lockStatus", "windowStatus", "driverSeat")) }
-        connected = false
+        postureAxes.clear()
+        caps = Capabilities(row2Occupancy = false, row2Recline = false, seatPosture = false,
+            ambientControl = false, seatControl = false, climateControl = false,
+            seatHeat = false, seatVent = false, steeringHeat = false, speed = false)
+        signals.update { it.copy(details = VehicleDetails(), seenAt = it.seenAt - staleReadings) }
     }
 
     private fun normalize(id: Int, v: CarPropertyValue<*>): Float {
@@ -279,6 +358,7 @@ class CarBridge(
     /** 구독 성공 여부를 돌려준다. 권한 거부·미지원 속성은 false. */
     private fun sub(name: String, id: Int, rate: Float = CarPropertyManager.SENSOR_RATE_ONCHANGE, apply: (Signals, CarPropertyValue<*>) -> Signals): Boolean {
         val m = pm ?: return false
+        val generation = subscriptionGeneration
         val detail = when (name) {
             "doors" -> DetailChannel.DOOR
             "lock" -> DetailChannel.LOCK
@@ -288,16 +368,16 @@ class CarBridge(
         }
         val cb = object : CarPropertyManager.CarPropertyEventCallback {
             override fun onChangeEvent(value: CarPropertyValue<*>) {
-                if (paused > 0) return
+                if (paused > 0 || generation != subscriptionGeneration) return
                 if (value.status != CarPropertyValue.STATUS_AVAILABLE) {
-                    detail?.let { channel -> signals.update { it.recordArea(channel, value.areaId, null, clock()) } }
+                    detail?.let { channel -> updateSignals { it.recordArea(channel, value.areaId, null, clock()) } }
                     return
                 }
-                runCatching { signals.update { stamp(apply(it, value), name) } }
+                runCatching { updateSignals { stamp(apply(it, value), name) } }
             }
 
             override fun onErrorEvent(propId: Int, zone: Int) {
-                if (paused == 0) detail?.let { channel -> signals.update { it.recordArea(channel, zone, null, clock()) } }
+                if (paused == 0 && generation == subscriptionGeneration) detail?.let { channel -> updateSignals { it.recordArea(channel, zone, null, clock()) } }
             }
         }
         val ok = runCatching { m.getCarPropertyConfig(id) != null && m.registerCallback(cb, id, rate) }.getOrDefault(false)
@@ -315,7 +395,7 @@ class CarBridge(
      * 확인 근거용 직접 조회: 구독으로 받은 값과 별개로 지금 값을 한 번 읽어 시각을 남긴다.
      * 차를 자꾸 깨우지 않도록 같은 신호는 [REFRESH_MIN_MS]에 한 번만 읽는다. 읽지 못하면 아무것도 바꾸지 않는다(결과 미확인).
      */
-    fun refresh(name: String) {
+    override fun refresh(name: String) {
         val m = pm ?: return
         val (id, apply) = readers[name] ?: return
         val t = clock()
@@ -325,7 +405,7 @@ class CarBridge(
         for (area in areas.ifEmpty { listOf(0) }) {
             val v = runCatching { m.getProperty<Any>(id, area) }.getOrNull() ?: continue
             if (v.status != CarPropertyValue.STATUS_AVAILABLE) continue
-            runCatching { signals.update { stamp(apply(it, v), name) } }
+            runCatching { updateSignals { stamp(apply(it, v), name) } }
         }
     }
 

@@ -1,6 +1,7 @@
 package com.verified.incar.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -76,6 +77,67 @@ class MyHyundaiBetterTest {
         assertTrue(p.first().what.startsWith("넘김") && p.any { it.what.startsWith("돌려받음") })
         assertTrue(p.any { it.what == "시동 ON" && it.src.startsWith("차 신호") })
         assertTrue(fx.any { it is Effect.Notify && "근거" in it.body })
+    }
+
+    /** 반납 때 근거를 한도에 맞게 줄여도 첫 줄 '넘김'(인수 상태)은 남는다. */
+    @Test fun lendReport_keepsHandoverLineEvenWithManyProofLines() {
+        val e = engine()
+        e.startLend(Signals(), 1_000)
+        // 맡긴 동안 근거 줄을 한도보다 많이 쌓는다(체크리스트를 켰다 껐다)
+        repeat(2 * VerdictEngine.PROOF_MAX) { i -> e.togglePrep(PrepItem.BUILTIN_CAM, 2_000L + i, valet = false) }
+        e.endLend(Signals(), 60_000)
+        val record = e.state.history.single()
+        assertTrue(record.proof.first().what.startsWith("넘김"))
+        assertTrue(record.proof.any { it.what.startsWith("돌려받음") })
+        assertTrue(record.proof.size <= VerdictEngine.PROOF_MAX)
+        assertTrue(e.state.lend.proof.first().what.startsWith("넘김"))
+    }
+
+    /** 반납 확인·대리 완료 뒤에 한 '돌려받을 때' 체크도 그 이력서 기록(상세·PDF)에 남는다. */
+    @Test fun returnChecklist_afterRecordIsWritten_isKeptInTheRecord() {
+        val e = engine()
+        e.startLend(Signals(), 1_000, HandKind.SERVICE)
+        e.endLend(Signals(), 60_000)
+        e.togglePrep(PrepItem.CAM_SAVE, 70_000, valet = false)
+        assertEquals(1, e.state.history.single().proof.count { it.what == "${PrepItem.CAM_SAVE.done} · 차주 확인" })
+        // 체크를 풀어도 이미 남긴 확인 기록은 지우지 않는다(맡긴 동안과 같은 규칙)
+        e.togglePrep(PrepItem.CAM_SAVE, 71_000, valet = false)
+        assertEquals(1, e.state.history.single().proof.count { it.what.startsWith(PrepItem.CAM_SAVE.done) })
+
+        // 근거가 한도(20줄)까지 찬 기록에 체크를 더해도 이미 남긴 근거 줄은 지우지 않고, 같은 확인은 한 번만 남긴다
+        val full = engine()
+        full.startLend(Signals(), 1_000)
+        repeat(2 * VerdictEngine.PROOF_MAX) { i -> full.togglePrep(PrepItem.BUILTIN_CAM, 2_000L + i, valet = false) }
+        full.endLend(Signals(), 60_000)
+        val saved = full.state.history.single().proof
+        repeat(3) { i -> full.togglePrep(PrepItem.CAM_SAVE, 70_000L + i, valet = false) }
+        val after = full.state.history.single().proof
+        assertEquals(saved, after.dropLast(1))
+        assertEquals(1, after.count { it.what.startsWith(PrepItem.CAM_SAVE.done) })
+
+        val v = engine()
+        v.startValet()
+        v.confirmValetConsent(Signals(), 1_000)
+        v.update(Signals(gear = Gear.D, speedKmh = 30f, place = Place.OTHER), 2_000)
+        v.update(Signals(place = Place.HOME), 3_000)
+        v.update(Signals(place = Place.HOME, ignitionOn = false), 4_000, shutdown = true)
+        assertEquals(ValetPhase.COMPLETE, v.state.valet.phase)
+        v.togglePrep(PrepItem.KEY_REVOKE, 5_000, valet = true)
+        assertTrue(v.state.history.single { it.kind == "대리" }.proof.any { it.what == "${PrepItem.KEY_REVOKE.done} · 차주 확인" })
+    }
+
+    /** 시연 앱을 다시 켜 예시 신호가 기본값(차주 착석)으로 돌아가도 진행 중인 빌려주기를 혼자 반납 처리하지 않는다. */
+    @Test fun restoredTrialLend_isNotAutoReturnedByResetExampleSignals() {
+        val e = engine()
+        e.loadSession(null, null, LendState(active = true, kind = HandKind.LEND, otherSeen = true, start = Snapshot(1_000, 80, 100.0, false, 0f)))
+        e.update(Signals(), 10_000)
+        assertTrue(e.state.lend.active)
+        assertTrue(e.state.history.isEmpty())
+        // 실제로 내렸다가 차주가 다시 앉으면 지금처럼 반납으로 본다
+        e.update(Signals(driverSeated = false), 11_000)
+        e.update(Signals(), 12_000)
+        assertFalse(e.state.lend.active)
+        assertEquals(1, e.state.history.size)
     }
 
     @Test fun horn_isNotWaitedFor() {

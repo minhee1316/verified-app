@@ -1,0 +1,10 @@
+Tool: built-in image_gen.imagegen (imagegen skill), edit from attached logo reference.
+Reference: 앱로고(아이콘).png
+Final: 현대_카가드_앱아이콘.png (copied unchanged to drawable-nodpi/carguard_logo.png).
+
+Prompt:
+Redesign the attached logo into one finished professional Android launcher icon for the Korean app 'Hyundai CarGuard'. The attached image is a concept reference (car + protection); replace its geometry with a much more disciplined premium automotive symbol. Flat vector-style raster image, square 1024 x 1024 canvas, full-bleed solid Hyundai dark navy #002C5F background (no rounded outer corners, no white margin; Android supplies the mask). Center a single confident simple white shield outline integrated with a minimal front-view automobile silhouette inside it: clean broad windshield, two tiny rectangular headlights, simple car body, and a subtle small cyan #00AAD2 check formed at the bottom of the shield. Geometric, balanced, crisp thick-enough consistent strokes, optical clarity at 48 px. Keep every meaningful white/cyan mark inside central 60% of canvas. Reflect Hyundai/myHyundai restraint, calm precision and vehicle protection. Zero text, no H logo, no gradients, no gloss, no glows, no shadows, no sparkles, no watermark, no app-device mockup, no extra options. Produce the actual final standalone square icon.
+
+UI reference (reference only; not packaged in the app):
+https://www.hyundai.com/kr/ko/digital-customer-support/app/myhyundai/myhyundai-information
+https://www.hyundai.com/content/dam/hyundai/kr/ko/images/customer-service/myhyundai/26/introduction_01_control.png

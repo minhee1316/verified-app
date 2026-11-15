@@ -37,6 +37,24 @@ class PleosBridgeTest {
         assertEquals(before, signals.value)
     }
 
+    /** 끊긴 Pleos·내비 연결에서 받은 값은 '받음'으로 남기지 않는다. CarBridge가 읽은 값은 건드리지 않는다. */
+    @Test fun disconnect_forgetsReadingsFromTheClosedConnection() {
+        val ctx = RuntimeEnvironment.getApplication()
+        val signals = MutableStateFlow(Signals(naviDest = "집", naviRemainKm = 3f, naviRemainMin = 5,
+            seenAt = mapOf("doors" to 1L, "soc" to 1L, "navi" to 1L, "speed" to 1L)))
+        val pleos = PleosBridge(ctx, signals, { 1L })
+        val navi = PleosNavi(ctx, signals, { 1L })
+        pleos.live += setOf("doors", "soc")
+        navi.live += "navi"
+        pleos.disconnect(); navi.disconnect()
+        val s = signals.value
+        assertEquals(setOf("speed"), s.seenAt.keys)
+        assertNull(s.naviDest)
+        assertNull(s.naviRemainKm)
+        assertNull(s.naviRemainMin)
+        assertTrue(pleos.live.isEmpty() && navi.live.isEmpty())
+    }
+
     @Test fun telltales_mapToWarnings_tpmsSeparate() {
         fun t(type: TelltaleType, st: TelltaleState) = TelltaleData(type, st, 0, 0, 0)
         val list = listOf(

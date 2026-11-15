@@ -24,7 +24,8 @@ class PleosNavi(
     private val paused: () -> Boolean = { false },
 ) {
     val live: MutableSet<String> = ConcurrentHashMap.newKeySet()
-    private var navi: NaviHelper? = null
+    // SDK 콜백(바인더 스레드)이 끊긴 연결인지 확인하므로 volatile
+    @Volatile private var navi: NaviHelper? = null
     val connected get() = navi != null
 
     private val listener = object : NaviHelperEventListener {
@@ -39,16 +40,24 @@ class PleosNavi(
         if (navi != null) return true
         if (!PleosBridge.available(ctx, NAVI_ACTION, NAVI_PKG)) return false
         val n = runCatching { NaviHelper(ctx) }.getOrNull() ?: return false
-        // 리스너는 연결된 뒤에 건다(SDK 안내). 이미 안내 중인 목적지를 한 번 물어 둔다
-        runCatching { n.initialize({ runCatching { n.addListener(listener); n.getDestinationInfo() } }, {}) }.getOrElse { return false }
+        // 연결 콜백이 바로 와도 첫 목적지 값을 버리지 않도록 먼저 붙여 둔다
         navi = n
+        // 리스너는 연결된 뒤에 건다(SDK 안내). 이미 안내 중인 목적지를 한 번 물어 둔다
+        runCatching { n.initialize({ runCatching { n.addListener(listener); n.getDestinationInfo() } }, {}) }.getOrElse {
+            navi = null
+            return false
+        }
         return true
     }
 
     fun disconnect() {
-        runCatching { navi?.removeListener(listener) }
-        runCatching { navi?.release() }
+        // 먼저 끊어, 늦게 도착한 콜백이 끊긴 내비 값을 다시 남기지 않게 한다
+        val n = navi
         navi = null
+        runCatching { n?.removeListener(listener) }
+        runCatching { n?.release() }
+        // 끊긴 내비의 목적지·남은 거리를 지금 안내 중인 값으로 남기지 않는다
+        if (live.isNotEmpty()) signals.update { it.copy(naviDest = null, naviRemainKm = null, naviRemainMin = null, seenAt = it.seenAt - "navi") }
         live.clear()
     }
 
@@ -62,13 +71,13 @@ class PleosNavi(
     }
 
     private fun put(dest: String, remainM: Int, remainSec: Int) {
-        if (paused()) return
+        if (paused() || navi == null) return
         live += "navi"
         runCatching { signals.update { it.copy(seenAt = it.seenAt + ("navi" to clock())).let { s -> naviSignals(s, dest, remainM, remainSec) } } }
     }
 
     private fun clear() {
-        if (paused()) return
+        if (paused() || navi == null) return
         runCatching { signals.update { it.copy(naviDest = null, naviRemainKm = null, naviRemainMin = null, seenAt = it.seenAt + ("navi" to clock())) } }
     }
 

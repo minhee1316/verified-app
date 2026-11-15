@@ -63,7 +63,7 @@ data class OpenTrip(val startMs: Long, val startOdo: Double, val from: Place, va
 data class TripState(val open: OpenTrip? = null, val pending: TripLog? = null, val logs: List<TripLog> = emptyList(), val suggestion: String? = null)
 
 enum class EscortPhase(val label: String) {
-    OFF("꺼짐"), BOARDING("승차 확인 중"), READY("출발 준비 완료"), RIDING("동행 운행 중"),
+    OFF("꺼짐"), BOARDING("승차 확인 중"), READY("출발 준비 완료"), RIDING("운행 중"),
     DEPARTED_UNVERIFIED("확인 없이 출발"), ALIGHT_GUIDE("하차 안내 중"), WRONG_SIDE("차도 쪽 문 열림"), ALIGHTED("하차 완료"),
 }
 
@@ -184,6 +184,8 @@ enum class PrepItem(val label: String, val phase: PrepPhase, val done: String) {
 data class HandoverRecord(
     val kind: String, val startMs: Long, val endMs: Long, val km: Double?, val maxSpeed: Float, val brakes: Int,
     val changes: List<String>, val ok: Boolean, val speedKnown: Boolean = true,
+    /** 시간순 근거(인수·시동·문·급감속·반납), 차주 메모, 맡길 때 정한 반납 예정 시각. 예전 기록에는 없다. */
+    val proof: List<Proof> = emptyList(), val memo: String = "", val dueMs: Long? = null,
 ) {
     val recordsDrivingStats get() = kind != "대리"
 
@@ -235,6 +237,10 @@ data class LendState(
     val idleMs: Long = 0,
     val idleSinceMs: Long? = null,
     val speedWarned: Boolean = false,
+    /** 차주 메모("타이어 교체", "오른쪽 문 기존 흠집")와 반납 예정 시각. 예정이 지나도 반납 전이면 한 번 알린다. */
+    val memo: String = "",
+    val dueMs: Long? = null,
+    val dueWarned: Boolean = false,
 )
 
 enum class ComfortPhase(val label: String) { OFF("대기"), REMOTE_RUNNING("원격으로 미리 켜는 중"), APPLIED("탑승 후 적용 완료") }
@@ -248,7 +254,7 @@ data class ComfortState(
     val message: String? = null,
 )
 
-const val DIAG_DISCLAIMER = "이 앱은 경고등과 고장 코드를 읽을 수 없습니다. 아래는 읽을 수 있는 설정 중 관련 있을 수 있는 항목이며, 고장 여부는 블루핸즈 점검으로 확인하세요."
+const val DIAG_DISCLAIMER = "관련 있을 수 있는 설정을 먼저 확인해 보세요. 고장 여부는 블루핸즈 점검으로 확인해요."
 
 data class EngineState(
     val valet: ValetState = ValetState(),
@@ -400,7 +406,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
     fun ownerCloseValet(): List<Effect> {
         val v = state.valet
         if (v.phase != ValetPhase.INCOMPLETE) return emptyList()
-        record("대리", v.handover?.timeMs ?: 0, v.result?.timeMs ?: 0, v.checkIn, v.checkOut, 0f, 0, ok = false)
+        record("대리", v.handover?.timeMs ?: 0, v.result?.timeMs ?: 0, v.checkIn, v.checkOut, 0f, 0, ok = false, proof = v.proof)
         state = state.copy(valet = state.valet.copy(phase = ValetPhase.CLOSED_BY_OWNER))
         return listOf(Effect.Notify("차주 폰", "① 차주 승인으로 대리 종료", "미완료 위치에서 차주가 직접 종료를 승인했습니다.", Level.INFO))
     }
@@ -412,7 +418,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
         if (s.uxRestricted) return listOf(Effect.Toast("정차한 뒤 반납을 확인해 주세요."))
         val out = carCheck(s, nowMs)
         val reason = "차주가 직접 반납 확인 · 주차 완료 자동 판정 없음"
-        record("대리", v.handover?.timeMs ?: nowMs, nowMs, v.checkIn, out, 0f, 0, ok = false, note = reason)
+        record("대리", v.handover?.timeMs ?: nowMs, nowMs, v.checkIn, out, 0f, 0, ok = false, note = reason, proof = v.proof + Proof(nowMs, reason, "차주 확인"))
         state = state.copy(valet = v.copy(phase = ValetPhase.CLOSED_BY_OWNER, result = snap(s, nowMs), checkOut = out,
             confirmedBy = reason, proof = v.proof + Proof(nowMs, reason, "차주 확인")))
         return listOf(Effect.Notify("차주 폰", "대리 반납 · 차주 직접 확인", reason, Level.INFO))
@@ -454,12 +460,14 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
     private fun valet(s: Signals, stoppedMs: Long, nowMs: Long, shutdown: Boolean, fx: MutableList<Effect>) {
         var v = state.valet
         if (!v.tracking) return
-        val driverLeft = (known("row2Occupancy", s) && !s.driverSeated) || (known("doors", s) && s.driverDoorOpen)
+        val driverLeft = (known("driverSeat", s) && !s.driverSeated) || (known("doors", s) && s.driverDoorOpen)
         val engineOff = shutdown || (known("ignition", s) && !s.ignitionOn)
         val parked = known("speed", s) && s.speedKmh == 0f && ((known("gear", s) && s.gear == Gear.P) || engineOff)
         val movingNow = known("speed", s) && s.speedKmh > 0f
         val locationKnown = valetLocationKnown(s, nowMs)
-        val home = locationKnown && s.place == Place.HOME
+        // 집에서 P단으로 1차 완료를 잡은 뒤 차가 움직이지 않았으면, 반경 경계의 GPS 흔들림으로 '집 밖'이 찍혀도 집으로 본다
+        // (움직이거나 위치를 잃거나 재부팅하면 prelimAtMs가 지워진다)
+        val home = locationKnown && (s.place == Place.HOME || v.prelimAtMs != null)
         if (locationKnown) v = v.copy(verificationPending = null)
         when {
             !stopped(s) && (!onCar || movingNow) -> v = v.copy(phase = ValetPhase.DRIVING, prelimAtMs = null, moved = true,
@@ -470,6 +478,8 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                 prelimAtMs = null,
                 verificationPending = "위치 신호를 기다리고 있어요. 완료·목적지 밖 하차 판정을 보류합니다.",
             )
+            // 목적지 밖 하차(미완료)는 차가 다시 움직이거나 차주가 끝낼 때까지 유지한다(서 있는 차의 GPS 흔들림으로 '완료'가 되지 않게)
+            v.phase == ValetPhase.INCOMPLETE -> {}
             home -> {
                 v = v.copy(verificationPending = null)
                 if (v.prelimAtMs == null) {
@@ -484,7 +494,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                 }
                 if (by != null) {
                     val why = if (by == "시동 OFF") listOf(Proof(nowMs, "시동 OFF", src("ignition", s)))
-                        else listOf(Proof(nowMs, "10초 정지", src("speed", s)), Proof(nowMs, "운전석 하차", src(if (s.driverDoorOpen) "doors" else "row2Occupancy", s)))
+                        else listOf(Proof(nowMs, "10초 정지", src("speed", s)), Proof(nowMs, "운전석 하차", src(if (s.driverDoorOpen) "doors" else "driverSeat", s)))
                     val out = carCheck(s, nowMs)
                     val eta = v.naviEtaMs?.let { listOf(Proof(nowMs, "예정 ${hhmm(it)} · 실제 ${hhmm(nowMs)}", "현대 내비 기준")) } ?: emptyList()
                     val changes = v.checkIn?.let { diffChecks(it, out) }
@@ -492,7 +502,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                         phase = ValetPhase.COMPLETE, result = snap(s, nowMs), confirmedBy = by, checkOut = out,
                         proof = v.proof + why + handoverProof("도착", s, nowMs) + eta,
                     )
-                    record("대리", v.handover?.timeMs ?: nowMs, nowMs, v.checkIn, out, 0f, 0, ok = true)
+                    record("대리", v.handover?.timeMs ?: nowMs, nowMs, v.checkIn, out, 0f, 0, ok = true, proof = v.proof)
                     fx += Effect.Notify("차주 폰", "① 대리 주차 완료", completeBody(v), Level.OK)
                     // 본문에는 '바뀐 것'을 따로 붙였으므로 근거 줄은 알림 뒤에 더한다
                     changes?.let { v = v.copy(proof = v.proof + changesProof(it, nowMs)) }
@@ -503,7 +513,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                 val out = carCheck(s, nowMs)
                 val changes = v.checkIn?.let { diffChecks(it, out) }
                 v = v.copy(phase = ValetPhase.INCOMPLETE, result = snap(s, nowMs), placeEstimated = false, checkOut = out, verificationPending = null)
-                v = v.copy(proof = v.proof + Proof(nowMs, if (engineOff) "시동 OFF" else "운전석 하차", src(if (engineOff) "ignition" else if (s.driverDoorOpen) "doors" else "row2Occupancy", s)) + placeProof(s, nowMs, v.placeEstimated))
+                v = v.copy(proof = v.proof + Proof(nowMs, if (engineOff) "시동 OFF" else "운전석 하차", src(if (engineOff) "ignition" else if (s.driverDoorOpen) "doors" else "driverSeat", s)) + placeProof(s, nowMs, v.placeEstimated))
                 val where = if (placeKnown(s)) "${s.place.label} 부근" else "위치 미확인(직접 확인 필요)"
                 fx += Effect.Notify(
                     "차주 폰", if (driverLeft) "① 집이 아닌 곳에서 기사가 내렸어요" else "① 목적지 밖에서 시동이 꺼졌어요",
@@ -568,7 +578,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             nowMs, k("odometer", s.odometerKm), k("soc", s.socPct), k("warnings", s.warnings),
             // 타이어 저압은 Pleos(tire)나 AAOS 공기압(tirePressure) 어느 쪽으로 읽어도 된다
             s.tirePressureLow.takeIf { known("tire", s) || known("tirePressure", s) },
-            k("washer", s.washerLow), k("oil", s.oilLow), k("window", s.windowOpen), k("doors", s.trunkOpen), k("lock", s.doorsLocked),
+            k("washer", s.washerLow), k("oil", s.oilLow), k("windowStatus", s.windowOpen), k("trunk", s.trunkOpen), k("lockStatus", s.doorsLocked),
             k("steering", s.steeringDeg), k("speed", s.speedKmh),
         )
     }
@@ -605,14 +615,29 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
     }
 
     /** 맡김 이력서에 한 줄 더한다. 새 경고등·저압·부족 표시가 생겼으면 '문제 없이 돌려받음'에서 뺀다. */
-    private fun record(kind: String, startMs: Long, endMs: Long, a: CarCheck?, b: CarCheck?, maxSpeed: Float, brakes: Int, ok: Boolean, note: String? = null) {
+    private fun record(kind: String, startMs: Long, endMs: Long, a: CarCheck?, b: CarCheck?, maxSpeed: Float, brakes: Int, ok: Boolean, note: String? = null,
+                       proof: List<Proof> = emptyList(), memo: String = "", dueMs: Long? = null) {
         val changes = (if (a != null && b != null) diffChecks(a, b) else listOf("확인 불가: 인수·반납 상태 기록 없음")) + listOfNotNull(note)
         val km = b?.distanceFrom(a)
         val speedKnown = b?.speedKmh != null || maxSpeed > 0f
         val verified = ok && (kind == "대리" || speedKnown) && changes.none { "새로" in it || it.startsWith("확인 불가") }
-        val record = HandoverRecord(kind, startMs, endMs, km, maxSpeed, brakes, changes, verified, speedKnown).respectingValetConsent()
+        val record = HandoverRecord(kind, startMs, endMs, km, maxSpeed, brakes, changes, verified, speedKnown, proof, memo.trim(), dueMs).respectingValetConsent()
         state = state.copy(history = state.history + record)
     }
+
+    /** 이력서 한 건의 차주 메모를 고친다(맡김 기록 상세 화면). */
+    fun setRecordMemo(startMs: Long, memo: String) {
+        state = state.copy(history = state.history.map { if (it.startMs == startMs) it.copy(memo = memo.trim().take(MEMO_MAX)) else it })
+    }
+
+    /** 맡기는 중인 건의 메모·반납 예정 시각을 고친다. 예정을 바꾸면 지남 알림을 다시 보낼 수 있다. */
+    fun setLendPlan(memo: String, dueMs: Long?) {
+        val l = state.lend
+        state = state.copy(lend = l.copy(memo = memo.trim().take(MEMO_MAX), dueMs = dueMs, dueWarned = l.dueWarned && l.dueMs == dueMs))
+    }
+
+    /** 반납 예정이 지났는데 아직 알리지 않았는지(쉬는 동안 깨울지 정할 때 쓴다). */
+    fun lendOverdue(nowMs: Long) = state.lend.let { it.active && it.dueMs != null && !it.dueWarned && nowMs > it.dueMs }
 
     fun loadHistory(h: List<HandoverRecord>) {
         state = state.copy(history = h.map { it.respectingValetConsent() })
@@ -629,13 +654,24 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             if (v.phase == ValetPhase.IDLE) return listOf(Effect.Toast("대리 모드를 시작한 뒤 체크할 수 있어요."))
             val on = item !in v.prep
             state = state.copy(valet = v.copy(prep = if (on) v.prep + item else v.prep - item, proof = if (on) v.proof + p else v.proof))
+            // 완료 기록을 이미 남겼으면(돌려받을 때 체크리스트) 이력서 기록에도 같은 근거 줄을 붙인다
+            if (on && v.phase == ValetPhase.COMPLETE) v.result?.timeMs?.let { end -> addRecordedProof("대리", end, p) }
         } else {
             val l = state.lend
             if (!l.active && l.report.isEmpty()) return listOf(Effect.Toast("빌려주기·맡김을 시작한 뒤 체크할 수 있어요."))
             val on = item !in l.prep
             state = state.copy(lend = l.copy(prep = if (on) l.prep + item else l.prep - item, proof = if (on) capped(l.proof + p) else l.proof))
+            // 반납 확인 뒤에 한 체크도 그 맡김의 이력서·PDF에 남긴다(다음 맡김을 시작하면 이 상태는 사라진다)
+            if (on && !l.active) addRecordedProof(if (l.kind == HandKind.SERVICE) "맡김" else "빌려주기", l.endedAtMs, p)
         }
         return emptyList()
+    }
+
+    /** 이미 남긴 이력서 기록(같은 종류·끝난 시각)에 근거 줄을 더한다. 기존 근거는 지우지 않고, 같은 확인은 한 번만 남긴다. */
+    private fun addRecordedProof(kind: String, endMs: Long, p: Proof) {
+        state = state.copy(history = state.history.map { r ->
+            if (r.kind == kind && r.endMs == endMs && r.proof.none { it.what == p.what }) r.copy(proof = r.proof + p) else r
+        })
     }
 
     /** 체크리스트 문구. 빌트인 캠 영상 저장은 찾아야 할 시간 범위(맡긴 시각~돌려받은 시각)를 그대로 보여 준다. */
@@ -704,7 +740,8 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             val isOwner = d.verdict == DriverVerdict.KNOWN && d.name == settings.profiles.firstOrNull()?.name
             if (!isOwner && !l.otherSeen) state = state.copy(lend = l.copy(otherSeen = true))
             // 다른 사람이 탄 뒤 차주 자세가 다시 확인되면 반납으로 본다. 맡김은 직원이 시트를 그대로 둘 수 있어 차주가 직접 끝낸다
-            else if (isOwner && l.otherSeen && l.kind == HandKind.LEND && s.parked) fx += endLend(s, nowMs)
+            // 시연 예시 신호는 앱을 다시 켜면 기본값(차주 착석)으로 돌아가므로, 복구 직후 첫 신호는 반납으로 보지 않는다
+            else if (isOwner && l.otherSeen && l.kind == HandKind.LEND && s.parked && (onCar || prev != null)) fx += endLend(s, nowMs)
         }
         // 맡김은 차주가 업체에 넘긴 것이라 보험 범위 경고 없이 리포트로만 남긴다(① 대리처럼)
         val service = l.active && l.kind == HandKind.SERVICE
@@ -769,11 +806,19 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
 
     // ---------------------------------------------------------------- ③ 업무 운행기록부
     private fun trip(s: Signals, p: Signals, place: Place, stoppedMs: Long, nowMs: Long, shutdown: Boolean, fx: MutableList<Effect>) {
+        fun ready(sample: Signals) = !onCar || (known("odometer", sample) && known("gear", sample) && known("speed", sample) &&
+            sample.odometerKm.isFinite() && sample.odometerKm >= 0.0 && sample.speedKmh.isFinite() && sample.speedKmh >= 0f)
+        fun isStopped(sample: Signals) = if (!onCar) stopped(sample) else sample.speedKmh == 0f &&
+            (sample.gear == Gear.P || (known("ignition", sample) && !sample.ignitionOn))
+        // 실차 초기 기본값(0km/P)을 출발·도착 근거로 쓰지 않는다. 필요한 신호가 올 때까지 열린 운행도 보존한다.
+        if (!ready(s)) return
         var t = state.trip
         // 정지에서 벗어나는 순간만 연다(N단·시동 OFF로 서 있는 동안 다시 열리지 않게)
-        if (t.open == null && !stopped(s) && stopped(p)) {
+        // D 신호가 주행계보다 먼저 왔다면 모든 값이 갖춰진 첫 장면부터 기록한다.
+        val startObserved = isStopped(p) || (onCar && (prev == null || !ready(p)))
+        if (t.open == null && !isStopped(s) && startObserved) {
             t = t.copy(open = OpenTrip(nowMs, s.odometerKm, place, currentDriverName()))
-        } else if (t.open != null && stopped(s) && (shutdown || stoppedMs >= TRIP_END_MS)) {
+        } else if (t.open != null && isStopped(s) && (shutdown || stoppedMs >= TRIP_END_MS)) {
             val o = t.open!!
             t = t.copy(open = null)
             // 재주차·기어만 바꾼 이동은 운행으로 남기지 않고, 목적을 고르지 않은 앞 운행도 그대로 둔다
@@ -928,7 +973,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                 val done = nowMs - (w.moveStartMs ?: nowMs) >= SCHOOL_WATCH_MS || s.odometerKm - w.startOdo >= SCHOOL_WATCH_KM
                 if (!done) w
                 else if (w.maxSpeed <= SCHOOL_LIMIT_KMH) {
-                    fx += Effect.Notify("차주 폰", "⑤ 천천히 출발 성공", "최고 %.0fkm/h · 블루멤버스 +100P (연동 목업)".format(w.maxSpeed), Level.OK)
+                    fx += Effect.Notify("차주 폰", "⑤ 천천히 출발 성공", "최고 %.0fkm/h · 블루멤버스 +100P".format(w.maxSpeed), Level.OK)
                     w.copy(phase = SchoolPhase.SUCCESS, streak = w.streak + 1, points = w.points + 100)
                 } else w.copy(phase = SchoolPhase.FAIL, streak = 0)
             }
@@ -1240,13 +1285,14 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
     }
 
     // ---------------------------------------------------------------- ② 빌려준 차 반납 리포트
-    fun startLend(s: Signals, nowMs: Long, kind: HandKind = HandKind.LEND): List<Effect> {
+    fun startLend(s: Signals, nowMs: Long, kind: HandKind = HandKind.LEND, memo: String = "", dueMs: Long? = null): List<Effect> {
         if (state.lend.active || state.valet.active) return listOf(Effect.Toast("이미 진행 중인 맡김이 있어요. 반납한 뒤 새로 시작해 주세요."))
         val gps = serviceGpsUsable(s, nowMs)
         state = state.copy(lend = LendState(
             active = true, start = snap(s, nowMs), kind = kind, proof = listOf(handoverProof("넘김", s, nowMs)),
             checkIn = carCheck(s, nowMs), startLat = s.lat.takeIf { gps }, startLon = s.lon.takeIf { gps },
             startAccuracyM = (s.gpsAccuracyM ?: 0f).takeIf { gps },
+            memo = memo.trim().take(MEMO_MAX), dueMs = dueMs?.takeIf { it > nowMs },
         ))
         val title = if (kind == HandKind.SERVICE) "정비 맡기기 시작" else "빌려주기 시작"
         return listOf(Effect.Notify("차주 폰", title, "맡긴 시각과 차량 상태를 기록했어요.", Level.INFO))
@@ -1271,16 +1317,17 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             "급감속" to if (known("speed", s)) "${l.brakes}회" else "확인 불가",
             "시동 켠 횟수" to if (known("ignition", s)) "${starts}회" else "확인 불가",
             "운전석 문 연 횟수" to if (known("doors", s)) "${l.doorOpens}회" else "확인 불가",
-            "창문" to if (!known("window", s)) "확인 불가" else if (s.windowOpen) "열림" else "닫힘",
+            "창문" to if (!known("windowStatus", s)) "확인 불가" else if (s.windowOpen) "열림" else "닫힘",
             "바퀴" to if (known("steering", s)) wheel else "확인 불가",
         ) + listOfNotNull(
             ("정차 중 배터리 사용" to "${l.parkedSocUsed}% (V2L·유틸리티 모드·공조 등)").takeIf { l.parkedSocUsed > 0 && known("soc", s) },
             idleText(l.idleMs, l.idleSinceMs, nowMs)?.let { "정차 중 시동" to it },
         )
         val changes = l.checkIn?.let { diffChecks(it, out) }
-        val proof = (l.proof + handoverProof("돌려받음", s, nowMs) + listOfNotNull(changes?.let { changesProof(it, nowMs) })).takeLast(PROOF_MAX)
+        // 맡긴 동안처럼 첫 줄('넘김' 인수 상태)은 남기고 나머지를 최근 줄로 줄인다
+        val proof = capped(l.proof + handoverProof("돌려받음", s, nowMs) + listOfNotNull(changes?.let { changesProof(it, nowMs) }))
         if (startMs != null) record(if (l.kind == HandKind.SERVICE) "맡김" else "빌려주기", startMs, nowMs, l.checkIn, out, l.maxSpeed, l.brakes, ok = !l.roamWarned && !l.speedWarned,
-            note = handoverNote(l.idleMs, l.idleSinceMs, l.speedWarned, nowMs))
+            note = handoverNote(l.idleMs, l.idleSinceMs, l.speedWarned, nowMs), proof = proof, memo = l.memo, dueMs = l.dueMs)
         state = state.copy(lend = LendState(report = report, kind = l.kind, endedAtMs = nowMs, proof = proof, checkIn = l.checkIn, checkOut = out, prep = l.prep, roamWarned = l.roamWarned, parkedSocUsed = l.parkedSocUsed))
         val body = report.joinToString(" · ") { "${it.first} ${it.second}" } + (changes?.let { " · 바뀐 것: " + it.joinToString(", ") } ?: "") +
             " · 근거 ${proof.size}줄(시각·출처)은 차 화면 리포트에 있어요: ${proofLine(listOf(proof.first(), proof.last()))}"
@@ -1290,6 +1337,11 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
     private fun lend(s: Signals, p: Signals, nowMs: Long, brake: Boolean, fx: MutableList<Effect>) {
         var l = state.lend
         if (!l.active) return
+        // 반납 예정 시각이 지났는데 아직 반납 확인 전이면 한 번 알린다
+        if (l.dueMs != null && !l.dueWarned && nowMs > l.dueMs) {
+            fx += Effect.Notify("차주 폰", "반납 예정 시각이 지났어요", "${l.kind.label} · 예정 ${hhmm(l.dueMs)} · 아직 반납 확인 전이에요", Level.WARN)
+            l = l.copy(dueWarned = true, proof = capped(l.proof + Proof(nowMs, "반납 예정 ${hhmm(l.dueMs)} 지남", "차주 설정")))
+        }
         val ignitionKnown = known("ignition", s) && known("ignition", p)
         val started = ignitionKnown && !p.ignitionOn && s.ignitionOn
         val doorOpened = known("doors", s) && known("doors", p) && !p.driverDoorOpen && s.driverDoorOpen
@@ -1358,19 +1410,29 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
 
     // ---------------------------------------------------------------- 마이현대: 드라이빙 인사이트 재료
     private fun driveStats(s: Signals, p: Signals, nowMs: Long, brake: Boolean, accel: Boolean) {
-        val driving = !(s.parked && p.parked)
+        fun speedReady(sample: Signals) = !onCar || (known("speed", sample) && sample.speedKmh.isFinite() && sample.speedKmh >= 0f)
+        fun motionReady(sample: Signals) = known("gear", sample) && speedReady(sample)
+        fun odoReady(sample: Signals) = !onCar || (known("odometer", sample) && sample.odometerKm.isFinite() && sample.odometerKm >= 0.0)
+        fun socReady(sample: Signals) = !onCar || (known("soc", sample) && sample.socPct in 0..100)
+        val motionObserved = motionReady(s) && motionReady(p)
+        val driving = motionObserved && !(s.parked && p.parked)
         // 서 있는 동안 늘어난 거리(첫 실제 값이 시뮬레이터 기본값을 덮는 순간 등)는 주행이 아니다
-        val km = if (driving) (s.odometerKm - p.odometerKm).coerceIn(0.0, 5.0) else 0.0
+        // 양쪽 주행계가 실제 수신된 구간만 더해 0→14,000km 초기 수신을 5km 이동으로 오인하지 않는다.
+        val km = if (driving && odoReady(s) && odoReady(p)) (s.odometerKm - p.odometerKm).coerceIn(0.0, 5.0) else 0.0
         // 배터리 표시가 79↔80으로 흔들려도 두 번 세지 않도록 주행 중 최저값보다 내려간 만큼만 센다.
         // 주차 중 소모(원격 공조 등)는 1%당 거리를 흐리므로 세지 않고 기준만 옮긴다
-        val ref = socRef ?: p.socPct
-        val socDrop = if (driving) (ref - s.socPct).coerceAtLeast(0) else 0
+        val energyObserved = socReady(s) && socReady(p)
+        val ref = socRef ?: if (socReady(p)) p.socPct else s.socPct
+        val socDrop = if (driving && energyObserved) (ref - s.socPct).coerceAtLeast(0) else 0
         socRef = when {
-            !driving || s.socPct > ref + 2 -> s.socPct
+            !socReady(s) -> null
+            !energyObserved || !driving || s.socPct > ref + 2 -> s.socPct
             else -> minOf(ref, s.socPct)
         }
-        if (km <= 0.0 && !brake && !accel && socDrop <= 0) return
-        state = state.copy(stats = MyHyundai.addToDay(state.stats, date(nowMs), km, brake, accel, socDrop))
+        val braking = brake && speedReady(s) && speedReady(p)
+        val accelerating = accel && speedReady(s) && speedReady(p)
+        if (km <= 0.0 && !braking && !accelerating && socDrop <= 0) return
+        state = state.copy(stats = MyHyundai.addToDay(state.stats, date(nowMs), km, braking, accelerating, socDrop))
     }
 
     fun loadStats(stats: List<DailyStat>) {
@@ -1394,7 +1456,10 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             ControlKind.HAZARD -> !s.hazardOn
             ControlKind.HORN -> null
         }
-        if (expect != null) state = state.copy(pendingControl = PendingControl(kind, expect, nowMs))
+        if (expect != null) {
+            if (state.pendingControl != null) noteControl(nowMs, "새 제어 요청으로 이전 요청 확인을 종료함", ControlResult.UNCONFIRMED)
+            state = state.copy(pendingControl = PendingControl(kind, expect, nowMs))
+        }
         val name = controlSignal(kind)
         val before = if (name == null) "경적은 반영을 알려 주는 차 신호가 없어요"
             else "보낼 때 ${signalNote(name, s, nowMs)}: ${controlValue(kind, s)}"
@@ -1430,14 +1495,25 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
         return if (ago < 2) "방금 읽은 차 신호" else if (ago < 120) "${ago}초 전 읽은 차 신호" else "${ago / 60}분 전 읽은 차 신호"
     }
 
+    fun loadControls(log: List<ControlEvidence>, nowMs: Long = System.currentTimeMillis()) {
+        state = state.copy(pendingControl = null, controlLog = log.take(30).map { ev ->
+            if (ev.result == ControlResult.WAITING) ev.copy(result = ControlResult.UNCONFIRMED,
+                steps = ev.steps + (nowMs to "앱 재시작으로 결과 확인이 중단됨 · 차에서 직접 확인해 주세요")) else ev
+        })
+    }
+
     private fun logControl(ev: ControlEvidence) {
-        state = state.copy(controlLog = (listOf(ev) + state.controlLog).take(5))
+        state = state.copy(controlLog = (listOf(ev) + state.controlLog).take(30))
     }
 
     /** 가장 최근 근거에 한 줄을 더하고 결과를 바꾼다. */
     private fun noteControl(nowMs: Long, line: String, result: ControlResult) {
-        val last = state.controlLog.firstOrNull() ?: return
-        state = state.copy(controlLog = listOf(last.copy(steps = last.steps + (nowMs to line), result = result)) + state.controlLog.drop(1))
+        val pending = state.pendingControl ?: return
+        val index = state.controlLog.indexOfFirst { it.kind == pending.kind && it.sentAtMs == pending.atMs }
+        if (index < 0) return
+        state = state.copy(controlLog = state.controlLog.mapIndexed { i, ev ->
+            if (i == index) ev.copy(steps = ev.steps + (nowMs to line), result = result) else ev
+        })
     }
 
     /**
@@ -1628,12 +1704,12 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
                 .takeIf { prev?.gear == Gear.N && (st.nhold.phase == NHoldPhase.GUIDE || st.nhold.phase == NHoldPhase.HOLDING) },
             // 주행 중엔 대리 화면이 잠기므로 현대 내비 도착 예정 시각을 요약에 붙인다
             ("① 대리: ${st.valet.phase.label}" + (st.valet.naviEtaMs?.takeIf { st.valet.phase == ValetPhase.DRIVING }?.let { " · ${hhmm(it)} 도착 예정" } ?: "")).takeIf { st.valet.active },
-            "④ 동행: ${st.escort.phase.label}".takeIf { st.escort.phase != EscortPhase.OFF },
+            "④ 부축 동행: ${st.escort.phase.label}".takeIf { st.escort.phase != EscortPhase.OFF },
             "⑤ 스쿨존: ${st.school.phase.label} · 최고 %.0fkm/h".format(st.school.maxSpeed).takeIf { st.school.phase == SchoolPhase.WATCH },
             "⑥ 승차감: 급감속 ${st.chauffeur.brakes}회 · 급가속 ${st.chauffeur.accels}회".takeIf { st.chauffeur.active },
-            "③ 운행 기록 중 (${st.trip.open?.from?.label} 출발)".takeIf { st.trip.open != null },
+            "③ 운행 기록: ${st.trip.open?.from?.label}에서 출발".takeIf { st.trip.open != null },
             "② 운전자: ${st.driver.name}".takeIf { st.driver.verdict != DriverVerdict.NOT_CHECKED },
-        ).take(3).ifEmpty { listOf("확인됨이 차 상태를 지켜보고 있어요") }
+        ).take(3).ifEmpty { listOf("현대 카가드가 차 상태를 지켜보고 있어요") }
     }
 
     companion object {
@@ -1660,6 +1736,8 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
         const val CONTROL_LATE_MS = 120_000L
         /** 빌려주기·맡김 근거로 남길 최대 줄 수(첫 줄 '넘김'은 늘 남긴다). */
         const val PROOF_MAX = 20
+        /** 맡김 메모 최대 글자 수. */
+        const val MEMO_MAX = 200
         /** ① 경로 이탈: 내비 남은 거리가 가장 가까웠을 때보다 이만큼 늘어난 채 이 시간 머물면 [제안값]. */
         const val NAVI_OFF_KM = 1.5f
         const val NAVI_OFF_MS = 60_000L
@@ -1748,7 +1826,7 @@ class VerdictEngine(var settings: Settings = Settings(), var caps: Capabilities 
             fun row(vararg v: String) = append(v.joinToString(",") { "\"" + csvSafe(it).replace("\"", "\"\"") + "\"" }).append('\n')
             fun km(v: Double) = "%.1f".format(java.util.Locale.ROOT, v)
             val sorted = logs.sortedBy { it.date }
-            append('﻿') // 엑셀 한글 깨짐 방지 BOM
+            append('\uFEFF') // 엑셀 한글 깨짐 방지 BOM
             row("사업연도", "법인명", "사업자등록번호", "차종", "자동차등록번호")
             row(sorted.firstOrNull()?.date?.take(4).orEmpty(), "", "", carModel?.label.orEmpty(), "")
             row("사용일자", "사용자(부서)", "사용자(성명)", "주행 전 계기판 거리(km)", "주행 후 계기판 거리(km)", "주행거리(km)", "출퇴근용(km)", "일반 업무용(km)", "비고")

@@ -4,13 +4,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +41,8 @@ fun PinPad(
 ) {
     var pin by remember { mutableStateOf("") }
     Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)).clickable(onClick = {}), contentAlignment = Alignment.Center) {
+        // 가로 폰처럼 창이 낮으면 패드를 스크롤해 아래 줄(0·확인·취소)까지 누를 수 있게 한다. 창에 다 들어가면 지금과 같다
+        Column(Modifier.verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
         Card(Modifier.width(560.dp).testTag("pin_pad"), padding = 28.dp) {
             CardHeader(null, title, sub, kicker = "차주 잠금")
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
@@ -69,6 +74,7 @@ fun PinPad(
                 }
             }
         }
+        }
     }
 }
 
@@ -93,13 +99,15 @@ fun OwnerPinGate(vm: VerifiedRuntime) {
     )
 }
 
-/** 설정 화면의 차주 잠금 묶음: PIN 정하기(두 번 입력) · 바꾸기 · 지금 잠그기 · 끄기. */
+/**
+ * 설정 화면의 차주 잠금 묶음: PIN 정하기(두 번 입력) · 바꾸기 · 지금 잠그기 · 끄기.
+ * 한 번만 보여 주는 복구 코드는 [onRecovery]로 넘겨, 설정 화면이 칸 배치(회전·탭)와 상관없이 띄운다.
+ */
 @Composable
-fun OwnerPinSettings(vm: VerifiedRuntime, u: UiState) {
+fun OwnerPinSettings(vm: VerifiedRuntime, u: UiState, onRecovery: (String) -> Unit) {
     var step by remember { mutableStateOf(0) }
     var first by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    var recovery by remember { mutableStateOf<String?>(null) }
     Panel {
         CardHeader(
             null, "차주 잠금 (PIN)",
@@ -120,21 +128,24 @@ fun OwnerPinSettings(vm: VerifiedRuntime, u: UiState) {
             onSubmit = { p ->
                 when {
                     step == 1 -> { first = p; step = 2; error = null }
-                    p == first -> { recovery = vm.setOwnerPin(p); step = 0 }
+                    p == first -> { vm.setOwnerPin(p)?.let(onRecovery); step = 0 }
                     else -> { error = "처음 입력과 달라요. 다시 정해 주세요"; step = 1 }
                 }
             },
             onCancel = { step = 0 },
         )
     }
-    recovery?.let { code ->
-        androidx.compose.ui.window.Dialog({ recovery = null }, androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)), contentAlignment = Alignment.Center) {
-                Card(Modifier.width(560.dp), padding = 28.dp) {
-                    CardHeader(null, "복구 코드를 적어 두세요", "PIN을 잊었을 때 이 코드로 PIN을 끌 수 있어요. 이 화면을 닫으면 다시 볼 수 없어요.", kicker = "차주 잠금")
-                    Text(code.chunked(4).joinToString("  "), Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 34.sp, fontWeight = FontWeight.Black, color = C.title, letterSpacing = 2.sp)
-                    BigButton("적어 두었어요", Modifier.fillMaxWidth(), fontSize = 20.sp) { recovery = null }
-                }
+}
+
+/** PIN을 정한 직후 한 번만 보여 주는 복구 코드. 차주가 닫을 때까지 유지한다. */
+@Composable
+fun RecoveryCodeDialog(code: String, onDone: () -> Unit) {
+    androidx.compose.ui.window.Dialog(onDone, androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)), contentAlignment = Alignment.Center) {
+            Card(Modifier.width(560.dp).testTag("recovery_code"), padding = 28.dp) {
+                CardHeader(null, "복구 코드를 적어 두세요", "PIN을 잊었을 때 이 코드로 PIN을 끌 수 있어요. 이 화면을 닫으면 다시 볼 수 없어요.", kicker = "차주 잠금")
+                Text(code.chunked(4).joinToString("  "), Modifier.fillMaxWidth(), textAlign = TextAlign.Center, fontSize = 34.sp, fontWeight = FontWeight.Black, color = C.title, letterSpacing = 2.sp)
+                BigButton("적어 두었어요", Modifier.fillMaxWidth(), fontSize = 20.sp) { onDone() }
             }
         }
     }

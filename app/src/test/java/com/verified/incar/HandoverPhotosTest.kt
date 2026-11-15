@@ -5,6 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import com.verified.incar.core.CarModel
 import com.verified.incar.core.HandKind
 import com.verified.incar.core.Persona
@@ -53,6 +56,57 @@ class HandoverPhotosTest {
         rule.onNodeWithTag("photo_after_FRONT").assertExists()
         val start = vm.ui.value.engine.lend.start!!.timeMs
         assertTrue("맡기기 전 사진이 이번 맡김으로 옮겨짐", HandoverPhotos.file(HandoverPhotos.recordDir(app, start), HandoverPhotos.BEFORE, "FRONT").exists())
+        vm.close()
+    }
+
+    /** PIN 재잠금으로 맡김 화면이 시작과 동시에 닫혀도 맡기기 전 사진은 그 맡김 기록에 붙는다. */
+    @Test fun beforePhotos_attachEvenWhenOwnerLockClosesTheHandoverScreen() {
+        val vm = VerifiedRuntime(app, simTicker = false)
+        vm.settings { it.copy(personas = Persona.entries.toSet(), carModel = CarModel.GRANDEUR) }
+        vm.setOwnerPin("2468")
+        rule.setContent { MaterialTheme { App(vm) } }
+        vm.navigate.value = "HAND_LEND"
+        rule.waitForIdle()
+        HandoverPhotos.save(HandoverPhotos.pendingDir(app, HandKind.LEND), HandoverPhotos.BEFORE, "FRONT", bmp())
+        vm.act { s, now -> startLend(s, now) }
+        rule.waitForIdle()
+        assertFalse("맡김을 시작하면 차주 잠금이 다시 걸린다", vm.ui.value.ownerUnlocked)
+        rule.onNodeWithTag("handover_photos").assertDoesNotExist()
+        val start = vm.ui.value.engine.lend.start!!.timeMs
+        assertTrue(HandoverPhotos.file(HandoverPhotos.recordDir(app, start), HandoverPhotos.BEFORE, "FRONT").exists())
+        assertFalse(HandoverPhotos.pendingDir(app, HandKind.LEND).exists())
+        vm.close()
+    }
+
+    /** 같은 종류를 다시 맡길 때도 맡기기 전 화면(사진·메모·반납 예정)을 거쳐 시작한다. */
+    @Test fun repeatHandover_reopensBeforeStateForNewPhotos() {
+        val vm = VerifiedRuntime(app, simTicker = false)
+        vm.settings { it.copy(personas = Persona.entries.toSet(), carModel = CarModel.GRANDEUR) }
+        rule.setContent { MaterialTheme { App(vm) } }
+        vm.navigate.value = "HAND_SERVICE"
+        rule.waitForIdle()
+        vm.act { s, now -> startLend(s, now, HandKind.SERVICE) }
+        vm.skipSeconds(600)
+        vm.act { s, now -> endLend(s, now) }
+        rule.waitForIdle()
+        val first = vm.ui.value.engine.history.single().startMs
+        rule.onNodeWithTag("lend_plan").assertDoesNotExist()
+        // 돌려받은 화면의 '다시 맡기기'는 바로 시작하지 않고 맡기기 전 화면을 연다
+        rule.onNodeWithTag("service_start").performScrollTo().performClick()
+        rule.waitForIdle()
+        assertFalse(vm.ui.value.engine.lend.active)
+        rule.onNodeWithTag("lend_plan").assertExists()
+        rule.onNodeWithText("맡기기 전").assertExists()
+        HandoverPhotos.save(HandoverPhotos.pendingDir(app, HandKind.SERVICE), HandoverPhotos.BEFORE, "REAR", bmp())
+        vm.skipSeconds(60)
+        rule.onNodeWithTag("service_start").performScrollTo().performClick()
+        rule.waitForIdle()
+        val lend = vm.ui.value.engine.lend
+        assertTrue(lend.active)
+        val second = lend.start!!.timeMs
+        assertTrue(second != first)
+        assertTrue(HandoverPhotos.file(HandoverPhotos.recordDir(app, second), HandoverPhotos.BEFORE, "REAR").exists())
+        assertFalse(HandoverPhotos.file(HandoverPhotos.recordDir(app, first), HandoverPhotos.BEFORE, "REAR").exists())
         vm.close()
     }
 }

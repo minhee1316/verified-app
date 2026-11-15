@@ -3,6 +3,7 @@ package com.verified.incar
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
+import java.security.Security
 import java.util.Base64
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -47,7 +48,9 @@ class Vault(private val keyOf: () -> SecretKey?) {
          * 암호문 기록을 평문 기본값으로 덮어쓰지 않게 한다.
          */
         private fun keystoreKey(): SecretKey? {
-            val ks = runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) } }.getOrNull() ?: return null
+            val ks = loadKeystore(!Security.getProviders("KeyStore.AndroidKeyStore").isNullOrEmpty()) {
+                KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            } ?: return null
             return (ks.getKey(ALIAS, null) as? SecretKey) ?: KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
                 init(
                     KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
@@ -57,5 +60,9 @@ class Vault(private val keyOf: () -> SecretKey?) {
                 generateKey()
             }
         }
+
+        /** provider 자체가 없는 테스트 환경만 평문을 허용한다. 실기기 load 실패는 그대로 전파한다. */
+        internal fun loadKeystore(providerAvailable: Boolean, load: () -> KeyStore): KeyStore? =
+            if (providerAvailable) load() else null
     }
 }

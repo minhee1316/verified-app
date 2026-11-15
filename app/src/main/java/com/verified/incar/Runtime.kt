@@ -82,23 +82,25 @@ data class UiState(
  */
 class VerifiedRuntime internal constructor(
     private val app: Application, simTicker: Boolean, private val sendPhone: (String, SentNotice) -> PhoneRelay.Result,
+    vehicleFactory: ((MutableStateFlow<Signals>, () -> Long) -> com.verified.incar.vehicle.VehicleSignalSource)?,
 ) {
-    constructor(app: Application, simTicker: Boolean = true) : this(app, simTicker, PhoneRelay::publish)
+    internal constructor(app: Application, simTicker: Boolean, sendPhone: (String, SentNotice) -> PhoneRelay.Result) : this(app, simTicker, sendPhone, null)
+    constructor(app: Application, simTicker: Boolean = true) : this(app, simTicker, PhoneRelay::publish, null)
     companion object {
         /** 안내할 것이 없을 때 안내줄 문구. */
-        const val IDLE_TOAST = "확인됨이 차 상태를 지켜보고 있어요"
+        const val IDLE_TOAST = "현대 카가드가 차 상태를 지켜보고 있어요"
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    // 휴대폰에서 차주가 고른 체험 모드: 예시 값으로 움직이고 기록은 따로 둔다. 차(자동차 OS)에서는 쓰지 않는다
-    private val automotive = app.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_AUTOMOTIVE)
-    val trial = !automotive && TrialMode.isOn(app)
-    private val store = Store(app, ns = if (trial) Store.TRIAL_NS else "")
+    // 미연결 제출 앱은 등록 없이 예시 차량으로 시작하며 실제 차량 기록과 저장소를 분리한다.
+    var trial = TrialMode.isOn(app)
+        private set
+    private var store = Store(app, ns = if (trial) Store.TRIAL_NS else "")
     private val speaker = Speaker(app)
-    private val engine = VerdictEngine(store.loadSettings())
+    private var engine = VerdictEngine(store.loadSettings())
     val signals = MutableStateFlow(Signals())
-    private val car = CarBridge(app, signals) { now() }
+    private val car = vehicleFactory?.invoke(signals, ::now) ?: CarBridge(app, signals) { now() }
     private val pleos = com.verified.incar.vehicle.PleosBridge(app, signals, { now() }) { car.paused > 0 }
     private val navi = com.verified.incar.vehicle.PleosNavi(app, signals, { now() }) { car.paused > 0 }
     private val places = PlaceTracker(app, signals, { now() }) { engine.settings.pins to engine.settings.pinRadiusM }
@@ -110,27 +112,30 @@ class VerifiedRuntime internal constructor(
     private var wasHandedOver = false
     /** PIN을 기다리는 차주 전용 조작. 이것이 있으면 화면이 PIN 패드를 띄운다. */
     val ownerRequest = MutableStateFlow<(() -> Unit)?>(null)
-    // 개발(debug) 빌드는 실차에서도 시뮬레이터를 연다
+    // 개발 저장소는 기존 테스트·개발 기록을 유지한다. 시연 가능 여부는 빌드 권한과 구분한다.
     private val debuggable = (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    /** 실차에 연결된 제출용 빌드에서는 시뮬레이터가 실제 신호를 덮어쓰지 못한다(예: 대리기사가 '집 도착·P단'을 꾸미는 것). */
-    val simAllowed get() = debuggable || trial
+    /** 실제 연결을 확인한 뒤에는 연결이 끊겨도 예시 신호로 되돌아가지 않는다. */
+    val simAllowed get() = !car.connected && !engine.onCar
+    private var switchingVehicle = false
+    private var carReadyHandled = false
+    private val scenarios = mutableSetOf<kotlinx.coroutines.Job>()
 
     /** 체험을 고를 수 있는지: 차 신호에 연결되지 않은 휴대폰·차 화면(개발 빌드 제외). */
-    private val trialAvailable get() = !debuggable && !trial && !car.connected &&
+    // 실차 연결을 한 번 확인한 뒤(연결이 잠시 끊겨도)에는 startTrial이 거절하므로 체험 카드도 띄우지 않는다
+    private val trialAvailable get() = !debuggable && !trial && simAllowed &&
         !engine.state.valet.active && !engine.state.lend.active
 
     /** 고른 차종으로 체험 저장소를 새로 만든다. 호출한 화면이 앱을 다시 시작해야 체험 모드로 열린다. */
     fun startTrial(model: CarModel): Boolean {
-        if (!trialAvailable) return false
+        if (!simAllowed || engine.state.valet.active || engine.state.lend.active) return false
         val trialStore = Store(app, ns = Store.TRIAL_NS)
         trialStore.wipeAll()
-        // 차주 PIN과 생활 유형은 이어 가고, 장소·동의·운전자 자세는 예시 기본값으로 시작한다
-        val d = Settings()
-        trialStore.saveSettings(engine.settings.copy(carModel = model, pins = d.pins, consents = d.consents, consentAt = d.consentAt, profiles = d.profiles))
+        // 실제 차주 설정을 복사하지 않고 예시 기본값으로 시작한다.
+        trialStore.saveSettings(newDemoSettings().copy(carModel = model))
         return TrialMode.set(app, true)
     }
 
-    /** 체험 기록을 지우고 실제 모드로 돌아간다. 호출한 화면이 앱을 다시 시작한다. */
+    /** 시연 저장소만 초기화한다. 미연결 상태에서 다시 시작하면 기본 예시 차량이 열린다. */
     fun endTrial(): Boolean {
         if (!trial) return false
         val off = TrialMode.set(app, false)
@@ -141,10 +146,12 @@ class VerifiedRuntime internal constructor(
     /** 차주 잠금 시간은 차 시계가 아니라 부팅 후 경과 시간으로 잰다(시계를 바꿔 잠금을 줄이지 못하게). */
     private fun mono() = android.os.SystemClock.elapsedRealtime()
 
-    fun ownerLocked() = engine.settings.ownerPinHash != null && mono() >= lock.unlockedUntilMs
+    fun ownerLocked() = "settings" in store.readFailedKeys ||
+        (engine.settings.ownerPinHash != null && mono() >= lock.unlockedUntilMs)
 
     /** 차주 전용 조작. PIN을 정하지 않았거나 방금 풀었으면 바로 하고, 아니면 PIN 패드를 거친다. */
     fun ownerOnly(action: () -> Unit) {
+        if ("settings" in store.readFailedKeys) return toast("차주 잠금 설정을 읽지 못했어요. 앱을 다시 열어 주세요. 기존 설정은 보존했어요.")
         if (ownerLocked()) ownerRequest.value = action else action()
     }
 
@@ -165,6 +172,7 @@ class VerifiedRuntime internal constructor(
 
     // ---- 서버 연결: 실제 네트워크 + 시연용 '서버 끊김'
     private var netOnline = true
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private var simOffline = false
     private var simControlFail = false
     private val online get() = netOnline && !simOffline
@@ -210,11 +218,12 @@ class VerifiedRuntime internal constructor(
     private fun saveNotices(notices: List<SentNotice>): Boolean {
         // 화면 이력은 50건. 연결을 기다리는 알림은 밀려나도 대기열에 남겨 둔다.
         val retained = notices.filterIndexed { index, n -> index < 50 || n.phoneStatus == PhoneDelivery.QUEUED }
+        // 저장에 실패해도 알림은 버리지 않는다. 화면·휴대폰 전송 대기열에 남기고 저장은 Store가 다시 시도한다
+        _ui.update { it.copy(notices = retained) }
         if (!store.saveNotices(retained)) {
             toast("알림을 저장하지 못했어요. 기기 저장 공간을 확인해 주세요.")
             return false
         }
-        _ui.update { it.copy(notices = retained) }
         return true
     }
 
@@ -239,15 +248,11 @@ class VerifiedRuntime internal constructor(
             val backoff = (5_000L shl (attempts - 1)).coerceAtMost(900_000L)
             val retryAt = if (result.status == PhoneDelivery.QUEUED)
                 System.currentTimeMillis() + maxOf(backoff, result.retryAfterMs) else 0
-            // 서버가 받은 건을 저장 실패 때문에 곧바로 다시 보내지 않고 저장만 재시도한다.
-            while (_ui.value.phoneTopic == topic) {
-                val updated = _ui.value.notices.map {
-                    if (it.phoneId == notice.phoneId && it.phoneStatus == PhoneDelivery.QUEUED)
-                        it.copy(phoneStatus = result.status, phoneAttempts = attempts, phoneRetryAt = retryAt) else it
-                }
-                if (saveNotices(updated)) break
-                delay(30_000)
-            }
+            // 서버가 받은 건은 화면 상태에 먼저 남겨 다시 보내지 않는다. 디스크 저장 실패는 Store 재시도 대기열이 이어 간다.
+            if (_ui.value.phoneTopic == topic) saveNotices(_ui.value.notices.map {
+                if (it.phoneId == notice.phoneId && it.phoneStatus == PhoneDelivery.QUEUED)
+                    it.copy(phoneStatus = result.status, phoneAttempts = attempts, phoneRetryAt = retryAt) else it
+            })
         }
     }
 
@@ -276,12 +281,23 @@ class VerifiedRuntime internal constructor(
      * PIN을 정하면 복구 코드를 새로 만들어 돌려준다(화면에 한 번만 보여 준다).
      */
     fun setOwnerPin(pin: String?): String? {
+        if ("settings" in store.readFailedKeys) {
+            toast("기존 차주 잠금 설정을 읽지 못해 PIN을 변경할 수 없어요. 앱을 다시 열어 주세요.")
+            return null
+        }
         if (pin != null && !com.verified.incar.core.OwnerPin.valid(pin)) return null
         val salt = com.verified.incar.core.OwnerPin.newSalt()
         val recovery = pin?.let { com.verified.incar.core.OwnerPin.newRecoveryCode() }
+        val old = engine.settings
         settings {
             if (pin == null) it.copy(ownerPinHash = null, ownerPinSalt = null, ownerRecoveryHash = null)
             else it.copy(ownerPinHash = com.verified.incar.core.OwnerPin.hash(pin, salt), ownerPinSalt = salt, ownerRecoveryHash = com.verified.incar.core.OwnerPin.hash(recovery!!, salt))
+        }
+        if ("settings" in store.failedWriteKeys) {
+            // 저장하지 못한 PIN 변경은 되돌린다(다시 켜면 사라질 PIN이나 쓸 수 없는 복구 코드를 보여 주지 않게)
+            settings { it.copy(ownerPinHash = old.ownerPinHash, ownerPinSalt = old.ownerPinSalt, ownerRecoveryHash = old.ownerRecoveryHash) }
+            toast("차주 PIN을 저장하지 못했어요. 저장 공간을 확인하고 다시 시도해 주세요. 기존 설정은 그대로예요.")
+            return null
         }
         lock = com.verified.incar.core.OwnerLock(unlockedUntilMs = mono() + com.verified.incar.core.OwnerPin.UNLOCK_MS)
         saveLock()
@@ -304,7 +320,9 @@ class VerifiedRuntime internal constructor(
         ownerRequest.value = null
         setOwnerPin(null)
         action?.invoke()
-        toast("복구 코드로 PIN을 껐어요. 설정에서 새 PIN을 정해 주세요.")
+        // PIN 끄기를 저장하지 못했으면 꺼졌다고 알리지 않는다(복구 코드로 차주 확인은 됐으므로 기다리던 조작은 한다)
+        toast(if (engine.settings.ownerPinHash == null) "복구 코드로 PIN을 껐어요. 설정에서 새 PIN을 정해 주세요."
+            else "PIN을 끄지 못했어요. 저장 공간을 확인하고 다시 시도해 주세요.")
         return null
     }
 
@@ -337,6 +355,20 @@ class VerifiedRuntime internal constructor(
     private var lastIgnition = true
     private var savedStats = emptyList<com.verified.incar.core.DailyStat>()
     private var savedSession: Any? = null
+    private var lastStorageRetryMs = Long.MIN_VALUE
+    private var storageFailureShown = false
+
+    /** 실패한 최신 값은 Store에 남아 있다. 차량 신호마다 디스크를 두드리지 않고 재시도한다. */
+    private fun retryStorage(force: Boolean = false) {
+        val t = mono()
+        if (store.hasPendingWrites && (force || lastStorageRetryMs == Long.MIN_VALUE || t - lastStorageRetryMs >= 30_000)) {
+            lastStorageRetryMs = t
+            store.retryPendingWrites()
+        }
+        val failed = store.failedWriteKeys.isNotEmpty() || store.readFailedKeys.isNotEmpty()
+        if (failed && !storageFailureShown) toast("기록을 저장하거나 읽지 못했어요. 저장 공간을 확인해 주세요. 기존 기록은 보존하고 있어요.")
+        storageFailureShown = failed
+    }
 
     /** 저장하는 세션 내용. 트렁크의 열린 시각·확인 질문은 재시작 뒤 쓸모없어 저장도 비교도 하지 않는다. */
     private fun sessionKey() = Triple(
@@ -344,65 +376,136 @@ class VerifiedRuntime internal constructor(
         engine.state.trunk.copy(askConfirm = false, openedAtMs = null), engine.state.school.streak,
     )
 
-    init {
-        // 앱을 강제로 껐다 켜서 PIN 시도 횟수·잠금을 되돌리지 못하게 이어 간다
+    private fun newDemoSettings() = Settings(
+        carModel = CarModel.GRANDEUR,
+        personas = com.verified.incar.core.Persona.entries.toSet(),
+        extraModules = com.verified.incar.core.Module.entries.toSet(),
+        flags = Flag.entries.toSet(),
+    )
+
+    /** 연결 시 기본 예시(차주 자세·공조·누적거리)를 지우고 수신된 항목만 seenAt에 채운다. */
+    private fun freshVehicleSignals() = Signals(
+        place = Place.OTHER, gpsLost = true, driverSeated = false, posture = emptyList(), ignitionOn = false,
+        socPct = 0, odometerKm = 0.0, hvacPowerOn = false, fanSpeed = 0, acOn = false,
+    )
+
+    /** 신규 시연만 기본값을 채운다. 시연 중 끈 승인·선택한 차종은 다시 켤 때도 유지한다. */
+    private fun useDemoStore() {
+        trial = true
+        store = Store(app, ns = Store.TRIAL_NS)
+        if (!store.hasSettings()) store.saveSettings(newDemoSettings())
+        engine = VerdictEngine(store.loadSettings())
+    }
+
+    /** 예시 설정·판정은 실제 연결로 넘기지 않고 실제 저장소에서 다시 불러온다. */
+    private fun useConnectedVehicle() {
+        trial = false
+        store = Store(app)
+        engine = VerdictEngine(store.loadSettings())
+        engine.onCar = true
+        engine.requireHomePin = true
+        engine.forgetPlace()
+        engine.caps = car.caps
+        engine.settings = engine.settings.copy(
+            carModel = CarModel.detect(signals.value.modelName) ?: engine.settings.carModel ?: CarModel.OTHER,
+            profiles = engine.settings.profiles.map {
+                if (it.posture == com.verified.incar.core.Postures.OWNER || it.posture == com.verified.incar.core.Postures.SPOUSE) it.copy(posture = emptyList()) else it
+            },
+        )
+        clockOffsetMs = 0
+        ownerRequest.value = null
+        simOffline = false
+        simControlFail = false
+        wasHandedOver = false
+        pleos.connect(skip = car.live.toSet())
+        navi.connect()
+        carReadyHandled = true
+    }
+
+    private fun loadStoredState() {
         store.loadLock().let { (tries, rounds, locked) ->
             lock = com.verified.incar.core.OwnerLock(
                 tries = tries, rounds = rounds,
                 lockedUntilMs = if (locked) mono() + (com.verified.incar.core.OwnerPin.LOCKOUT_MS shl (rounds - 1).coerceIn(0, 6)) else 0,
             )
         }
-        val connected = car.connect()
-        if (connected || !simAllowed) {
-            engine.onCar = true
-            engine.requireHomePin = true
-            engine.forgetPlace()
-            signals.update { it.copy(place = Place.OTHER, gpsLost = true) }
-            engine.settings = engine.settings.copy(profiles = engine.settings.profiles.map {
-                if (it.posture == com.verified.incar.core.Postures.OWNER || it.posture == com.verified.incar.core.Postures.SPOUSE) it.copy(posture = emptyList()) else it
-            })
-            engine.caps = if (connected) car.caps else Capabilities(
-                row2Occupancy = false, row2Recline = false, seatPosture = false,
-                ambientControl = false, seatControl = false, climateControl = false,
-                seatHeat = false, seatVent = false, steeringHeat = false, speed = false,
-            )
-        }
-        if (connected) {
-            // 실차가 알려 준 모델명으로 차종을 자동 등록한다
-            // 알아보지 못하면 차주가 고른 차종을 두고, 고른 적이 없을 때만 '그 밖의 차량'으로 주행 기능만 쓴다
-            engine.settings = engine.settings.copy(carModel = CarModel.detect(signals.value.modelName) ?: engine.settings.carModel ?: CarModel.OTHER)
-            // 현대 Pleos 차면 AAOS로 못 읽는 신호(경고·오일·워셔액 등)를 더 읽는다. 서비스가 없으면 둘 다 아무것도 안 한다
-            pleos.connect(skip = car.live.toSet())
-            navi.connect()
-        }
-        startLocation()
         engine.loadTrips(VerdictEngine.keepRecent(store.loadTrips(), java.time.LocalDate.now()))
+        engine.loadControls(store.loadControls())
+        store.saveControls(engine.state.controlLog)
         engine.loadStats(store.loadStats())
         engine.loadHistory(com.verified.incar.core.MyHyundai.keepHistory(store.loadHistory(), java.time.LocalDate.now()))
-        store.loadSession().let { ss ->
-            engine.loadSession(ss.pending, ss.open, ss.lend, ss.trunk, ss.streak)
-        }
-        // 방금 불러온 기록은 이미 저장돼 있다(켤 때마다 다시 암호화해 쓰지 않게)
+        store.loadSession().let { ss -> engine.loadSession(ss.pending, ss.open, ss.lend, ss.trunk, ss.streak) }
         savedStats = engine.state.stats
         savedSession = sessionKey()
         _ui.update { it.copy(notices = store.loadNotices(), phoneTopic = store.loadPhoneTopic()) }
+        val savedValet = store.loadValet()
+        val bootAtMs = System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()
+        handle(engine.recoverValet(savedValet, rebooted = (savedValet.prelimAtMs ?: 0) < bootAtMs))
+        if (engine.state.valet != savedValet) store.saveValet(engine.state.valet)
+    }
+
+    /** 서비스 복구 시 진행 중 맡김을 초기화하지 않고 신호 연결만 복구한다. */
+    private fun vehicleConnectionChanged(ready: Boolean) {
+        switchingVehicle = true
+        try {
+            if (ready) {
+                if (!engine.onCar) {
+                    retryStorage(force = true)
+                    scenarios.toList().forEach { it.cancel() }
+                    car.paused = 0
+                    signals.value = freshVehicleSignals()
+                    useConnectedVehicle()
+                    loadStoredState()
+                    lastIgnition = false
+                    phoneWake.trySend(Unit)
+                } else {
+                    engine.caps = car.caps
+                    if (!carReadyHandled) {
+                        pleos.connect(skip = car.live.toSet())
+                        navi.connect()
+                        carReadyHandled = true
+                    }
+                }
+            } else if (engine.onCar) {
+                carReadyHandled = false
+                pleos.disconnect()
+                navi.disconnect()
+                engine.caps = car.caps
+                toast("차량 신호 연결을 기다리고 있어요. 기존 기록은 유지해요.")
+            }
+        } finally { switchingVehicle = false }
+        startLocation()
+        // CarBridge는 이 콜백 이후 초기 실제 신호를 한 번에 반영한다. 미수신 0값으로 판정하지 않는다.
+        publish()
+    }
+
+    init {
+        car.setConnectionListener(::vehicleConnectionChanged)
+        val example = signals.value
+        signals.value = freshVehicleSignals()
+        val connected = car.connect()
+        if (connected) {
+            signals.update { it.copy(place = Place.OTHER, gpsLost = true) }
+            useConnectedVehicle()
+        } else {
+            signals.value = example
+            if (!debuggable || trial) useDemoStore()
+        }
+        startLocation()
+        loadStoredState()
         // 실제 네트워크가 끊기면(지하·음영 지역) 알림을 보관한다
         runCatching {
             val cm = app.getSystemService(android.net.ConnectivityManager::class.java)
-            cm?.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) { scope.launch { setNet(true) } }
                 override fun onLost(network: android.net.Network) { scope.launch { setNet(false) } }
-            })
+            }
+            cm?.registerDefaultNetworkCallback(callback)
+            networkCallback = callback.takeIf { cm != null }
             // 망 없이 켜지면 콜백이 오지 않는다(onLost는 받은 망에만 옴). 그래서 등록 뒤 지금 상태를 직접 본다
             if (cm != null) netOnline = cm.activeNetwork != null
         }
         scope.launch { deliverPhoneNotices() }
-        val savedValet = store.loadValet()
-        // 부팅 추정 시각은 복구 안내에만 사용한다. 재부팅 자체를 주차 완료 근거로 쓰지 않는다.
-        val bootAtMs = System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()
-        val recovered = engine.recoverValet(savedValet, rebooted = (savedValet.prelimAtMs ?: 0) < bootAtMs)
-        handle(recovered)
-        if (engine.state.valet != savedValet) store.saveValet(engine.state.valet)
         scope.launch { signals.collect { step() } }
         if (simTicker) scope.launch {
             var lastScheduleMs = 0L
@@ -414,7 +517,8 @@ class VerifiedRuntime internal constructor(
                 places.checkLost()
                 val scheduleDue = engine.settings.schedule.enabled && now() - lastScheduleMs >= 30_000
                 if (scheduleDue) lastScheduleMs = now()
-                val tick = !car.connected || engine.needsTick() || scheduleDue
+                // 반납 예정 시각이 지난 맡김은 쉬는 중이어도 한 번 깨워 알린다
+                val tick = !car.connected || engine.needsTick() || scheduleDue || engine.lendOverdue(now())
                 // 실차에서 쉬는 동안에도 5분 차주 재잠금을 화면에 반영한다(열어 둔 설정이 닫히게)
                 if (!tick) { if (_ui.value.ownerUnlocked && ownerLocked()) publish(); continue }
                 if (!car.connected && simAllowed) signals.update { s ->
@@ -432,10 +536,12 @@ class VerifiedRuntime internal constructor(
         val valet = e.state.valet.saved()
         val trips = e.state.trip.logs
         val session = Triple(e.state.trip.pending, e.state.trip.open, e.state.lend)
+        val controls = e.state.controlLog
         val history = e.state.history
     }
 
     private fun persist(b: Snap, shutdown: Boolean) {
+        if (engine.state.controlLog != b.controls) store.saveControls(engine.state.controlLog)
         if (engine.state.valet.saved() != b.valet) store.saveValet(engine.state.valet)
         if (engine.state.history != b.history) store.saveHistory(engine.state.history, now = true)
         if (engine.state.trip.logs != b.trips) store.saveTrips(engine.state.trip.logs, now = shutdown)
@@ -450,9 +556,15 @@ class VerifiedRuntime internal constructor(
     }
 
     private fun step() {
+        if (switchingVehicle) return
+        retryStorage()
         // 제출용 휴대폰에서는 수동 맡김·반납과 휴대폰 전송만 진행한다. 연결 전 초기 신호로 자동 판정하지 않는다.
         if (!car.connected && !simAllowed) return publish()
         val s = signals.value
+        if (car.connected && engine.onCar) CarModel.detect(s.modelName)?.let { model ->
+            if (engine.settings.carModel != model) engine.settings = engine.settings.copy(carModel = model)
+        }
+        if (car.connected && engine.onCar) engine.caps = connectedCaps(s)
         val shutdown = lastIgnition && !s.ignitionOn
         lastIgnition = s.ignitionOn
         // 시동 OFF(Suspend): 음성을 멈추고 오디오 포커스를 반납한다
@@ -468,7 +580,16 @@ class VerifiedRuntime internal constructor(
             store.saveStats(engine.state.stats, now = shutdown)
             savedStats = engine.state.stats
         }
+        if (shutdown) retryStorage(force = true)
         publish()
+    }
+
+    /**
+     * 차가 알려 준 지원 여부. AAOS(CarBridge)가 2열 착좌를 못 읽어도 Pleos에서 뒷좌석 착좌 값을 실제로 받았으면
+     * 착좌 센서로 판정한다(벨트로만 대신 보지 않게). 받은 값이 없으면 CarBridge 값을 그대로 쓴다.
+     */
+    private fun connectedCaps(s: Signals) = car.caps.let { c ->
+        if (!c.row2Occupancy && com.verified.incar.core.SeatPart.entries.drop(2).any { s.details.occupied[it]?.value != null }) c.copy(row2Occupancy = true) else c
     }
 
     private fun handle(fx: List<Effect>, quiet: Boolean = false) {
@@ -532,7 +653,11 @@ class VerifiedRuntime internal constructor(
             }
         }
         toast?.let { this.toast(it) }
-        if (sent.isNotEmpty() && saveNotices(sent.reversed() + _ui.value.notices)) phoneWake.trySend(Unit)
+        // 저장에 실패해도 휴대폰 전송은 깨운다(알림은 화면 상태와 전송 대기열에 남아 있다)
+        if (sent.isNotEmpty()) {
+            saveNotices(sent.reversed() + _ui.value.notices)
+            phoneWake.trySend(Unit)
+        }
         later.forEach { signals.update(it) }
     }
 
@@ -570,10 +695,23 @@ class VerifiedRuntime internal constructor(
         val before = engine.settings
         val snap = Snap(engine)
         handle(engine.block(signals.value, now()))
+        attachBeforePhotos(snap)
         if (engine.settings != before) store.saveSettings(engine.settings)
         persist(snap, shutdown = false)
         wake.trySend(Unit)
         step()
+    }
+
+    /**
+     * 맡김이 시작되면 맡기기 전 사진을 그 맡김 기록으로 옮긴다. PIN 재잠금으로 맡김 화면이 바로 닫혀도
+     * (화면의 LaunchedEffect가 돌기 전) 사진이 이 기록에 붙게 한다. 화면 쪽 옮기기는 재시도로 남는다.
+     */
+    private fun attachBeforePhotos(b: Snap) {
+        val l = engine.state.lend
+        val start = l.start?.timeMs ?: return
+        if (!l.active || b.session.third.active) return
+        runCatching { com.verified.incar.ui.HandoverPhotos.attach(app, l.kind, start, trial) }
+            .onFailure { toast("맡길 때 사진 일부를 옮기지 못했어요. 원본은 이 기기에 남아 있어요.") }
     }
 
     fun settings(change: (Settings) -> Settings) = act { _, _ -> settings = change(settings); emptyList() }
@@ -624,14 +762,50 @@ class VerifiedRuntime internal constructor(
 
     /** 위치 권한을 받은 뒤 호출한다. 권한이 없으면 아무것도 하지 않는다. */
     fun startLocation() {
-        places.start()
+        // 예시 장소 판정에는 휴대폰의 실제 GPS를 섞지 않는다.
+        if (simAllowed) { places.stop(); places.paused = true }
+        else { places.paused = false; places.start() }
         publish()
     }
 
     /** 권한 창에 답한 뒤·화면으로 돌아올 때 부른다. 차 권한을 새로 받았으면 차 신호를 다시 구독하고 위치를 켠다. */
     fun onPermissions() {
-        if (car.resubscribeIfGranted()) engine.caps = car.caps
+        if (!car.connected) {
+            val previous = signals.value
+            val paused = car.paused
+            switchingVehicle = true
+            try {
+                car.paused = 0
+                if (!engine.onCar) signals.value = freshVehicleSignals()
+                if (car.connect()) {
+                    scenarios.toList().forEach { it.cancel() }
+                    if (!engine.onCar) {
+                        useConnectedVehicle()
+                        loadStoredState()
+                    } else engine.caps = car.caps
+                    phoneWake.trySend(Unit)
+                } else {
+                    signals.value = previous
+                    car.paused = paused
+                }
+            } finally { switchingVehicle = false }
+        } else {
+            // 새 권한으로 CarBridge가 다시 구독하면 Pleos도 새 건너뛰기 목록으로 다시 붙인다
+            // (CarBridge가 정리하며 지운 문·창문·좌석 값을 다시 읽고, 이제 CarBridge가 읽는 신호는 두 곳에서 쓰지 않게)
+            val resubscribed = car.resubscribeIfGranted()
+            if (resubscribed || !car.connected) {
+                engine.caps = car.caps
+                pleos.disconnect()
+                carReadyHandled = false
+                // 연결 콜백이 늦게 오면 vehicleConnectionChanged(true)가 같은 방식으로 다시 붙인다
+                if (resubscribed) {
+                    pleos.connect(skip = car.live.toSet())
+                    carReadyHandled = true
+                }
+            }
+        }
         startLocation()
+        step()
     }
 
     /** 지금 차가 있는 곳을 [place]로 등록한다. */
@@ -648,7 +822,7 @@ class VerifiedRuntime internal constructor(
      * 생활 유형·차종·출발 준비 설정처럼 기록이 아닌 선택은 남긴다.
      */
     fun wipeMyData() {
-        store.clearRecords()
+        val cleared = store.clearRecords()
         // 지운 알림이 뒤따르는 판정의 새 알림과 함께 다시 저장되지 않게 먼저 비운다
         _ui.update { it.copy(notices = emptyList(), phoneTopic = null) }
         phoneWake.trySend(Unit)
@@ -657,20 +831,46 @@ class VerifiedRuntime internal constructor(
         if (engine.onCar) engine.forgetPlace()
         val d = Settings()
         val profiles = if (engine.onCar) d.profiles.map { p -> p.copy(posture = emptyList()) } else d.profiles
-        settings { it.copy(profiles = profiles, pins = emptyMap(), consentAt = emptyMap(), consents = d.consents) }
+        // 주차 위치 사진은 기록 파일과 함께 지워지므로 같은 주차 위치 메모도 함께 지운다
+        settings { it.copy(profiles = profiles, pins = emptyMap(), consentAt = emptyMap(), consents = d.consents, parkingNote = "", parkingNoteAtMs = 0) }
         // 핀을 지웠으니 지난 장소 판정도 버린다(settings 뒤라야 비운 자세로 운전자를 판정한다)
         if (engine.onCar) signals.update { it.copy(place = Place.OTHER, gpsLost = true) }
-        toast("내 기록을 지웠어요. 운행기록·대리 기록·알림·자세·장소·동의 기록이 삭제됐어요.")
+        toast(if (cleared && "settings" !in store.failedWriteKeys) "내 기록을 지웠어요. 운행기록·대리 기록·알림·자세·장소·동의 기록이 삭제됐어요."
+            else "기록을 모두 지우지 못했어요. 저장 공간을 확인하고 다시 시도해 주세요.")
+    }
+
+    /** 신호 패널 없는 제출 앱에서도 시연 주행을 끝내고 정차 화면으로 돌아갈 수 있다. */
+    fun stopDemoDriving() {
+        if (!simAllowed || car.connected) return
+        scenarios.toList().forEach { it.cancel() }
+        signals.update { it.copy(speedKmh = 0f, gear = Gear.P, systemUxRestricted = false) }
+        step()
+        toast("시연 주행을 멈췄어요. 정차 상태에서 계속 둘러보세요.")
     }
 
     /** PT·영상용 자동 재생. 실제 신호 순서를 그대로 흘려 엔진이 스스로 판정하게 한다. */
     fun runScenario(name: String) = scope.launch {
         if (!simAllowed) return@launch
+        // 첫 화면이 바뀌기 전(첫 delay) 연속으로 눌러도 재생 작업은 하나만 만든다.
+        if (scenarios.any { it.isActive }) {
+            toast("시연이 진행 중이에요. 끝난 뒤 다른 시연을 시작해 주세요.")
+            return@launch
+        }
+        val scenario = coroutineContext.job
+        scenarios += scenario
         // 차속·외기 같은 연속 신호와 GPS는 값이 같아도 다시 와 재생 값을 덮어쓰므로, 재생하는 동안만 받지 않는다
         car.paused++
         places.paused = true
-        coroutineContext.job.invokeOnCompletion { car.paused--; places.paused = car.paused > 0 }
-        suspend fun to(delayMs: Long = 900, change: (Signals) -> Signals) { signals.update(change); delay(delayMs) }
+        scenario.invokeOnCompletion {
+            scenarios -= scenario
+            car.paused = (car.paused - 1).coerceAtLeast(0)
+            places.paused = simAllowed
+        }
+        suspend fun to(delayMs: Long = 900, change: (Signals) -> Signals) {
+            if (!simAllowed) throw kotlinx.coroutines.CancellationException("실제 차량 연결로 시연 종료")
+            signals.update(change)
+            delay(delayMs)
+        }
         val base = Signals(row2Seated = false, row2Belt = false)
         signals.value = base
         delay(300)
@@ -812,30 +1012,79 @@ class VerifiedRuntime internal constructor(
     /** 맡김 이력서 CSV(인증중고차 매각·보험 설명 자료). 운행기록부와 같은 경로에 쓰고 '내 기록 지우기'로 지운다. */
     fun exportHistory() = saveCsv("맡김이력서_${VerdictEngine.date(now())}.csv", com.verified.incar.core.MyHyundai.historyCsv(engine.state.history), "맡김 이력서 CSV")
 
+    /**
+     * 맡김 한 건을 PDF로 다운로드 폴더에 저장하고, 보낼 수 있는 주소를 돌려준다(공유 창은 화면이 연다).
+     * 다운로드에 못 쓰는 차에서는 앱 폴더에 남기고 null을 돌려준다.
+     */
+    fun exportRecordPdf(startMs: Long): android.net.Uri? {
+        val r = engine.state.history.firstOrNull { it.startMs == startMs } ?: return null.also { toast("기록을 찾지 못했어요") }
+        val name = RecordPdf.fileName(r, trial)
+        val uri = runCatching {
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/pdf")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                // 다 쓰기 전에는 다른 앱에 보이지 않게 한다(쓰다 꺼져도 미완성 파일이 공개되지 않게)
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = app.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)!!
+            runCatching {
+                app.contentResolver.openOutputStream(uri)!!.use { RecordPdf.render(app, r, trial, it) }
+                publishDownload(uri)
+            }.onFailure { app.contentResolver.delete(uri, null, null) }.getOrThrow()
+            uri
+        }.getOrNull()
+        if (uri != null) { toast("맡김 기록 PDF를 다운로드 폴더에 저장했어요: $name"); return uri }
+        val saved = runCatching {
+            RecordFiles.writeAtomically(File(app.getExternalFilesDir(null) ?: app.filesDir, name)) { RecordPdf.render(app, r, trial, it) }
+        }.isSuccess
+        toast(if (saved) "맡김 기록 PDF를 차 안에 저장했어요: $name" else "PDF를 만들지 못했어요")
+        return null
+    }
+
     /** 현대 기능 체크리스트 체크·해제. 차주 전용(PIN). [valet]: ① 대리 화면이면 true, 빌려주기·맡김이면 false. */
     fun togglePrep(item: com.verified.incar.core.PrepItem, valet: Boolean) = ownerOnly { act { _, now -> togglePrep(item, now, valet) } }
 
     fun prepLabel(item: com.verified.incar.core.PrepItem, valet: Boolean) = engine.prepLabel(item, valet)
 
-    private fun saveCsv(name: String, csv: String, what: String) {
+    private fun saveCsv(baseName: String, csv: String, what: String) {
+        val name = RecordFiles.csvName(baseName, trial)
         val saved = runCatching {
             val values = android.content.ContentValues().apply {
                 put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
                 put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/csv")
                 put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = app.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)!!
             // 쓰다 실패하면 빈 파일을 남기지 않는다
-            runCatching { app.contentResolver.openOutputStream(uri)!!.use { it.write(csv.toByteArray()) } }
-                .onFailure { app.contentResolver.delete(uri, null, null) }.getOrThrow()
+            runCatching {
+                app.contentResolver.openOutputStream(uri)!!.use { it.write(csv.toByteArray()) }
+                publishDownload(uri)
+            }.onFailure { app.contentResolver.delete(uri, null, null) }.getOrThrow()
         }.isSuccess
         if (saved) return toast("${what}를 다운로드 폴더에 저장했어요: $name")
         val f = File(app.getExternalFilesDir(null) ?: app.filesDir, name)
-        f.writeText(csv)
-        toast("${what}를 차 안에 저장했어요: $name (차 밖으로 꺼내기는 서버 연동 후 지원)")
+        val localSaved = runCatching {
+            RecordFiles.writeAtomically(f) { it.write(csv.toByteArray(Charsets.UTF_8)) }
+        }.isSuccess
+        toast(if (localSaved) "${what}를 차 안에 저장했어요: $name (차 밖으로 꺼내기는 서버 연동 후 지원)"
+            else "${what}를 저장하지 못했어요. 저장 공간을 확인하고 다시 시도해 주세요.")
+    }
+
+    /** 다 쓴 다운로드 파일을 다른 앱(파일·공유)에 보이게 한다. 공개하지 못하면 실패로 보고 지운다. */
+    private fun publishDownload(uri: android.net.Uri) {
+        val values = android.content.ContentValues().apply { put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0) }
+        check(app.contentResolver.update(uri, values, null, null) > 0) { "다운로드 파일을 공개하지 못했어요" }
     }
 
     fun close() {
+        retryStorage(force = true)
+        car.setConnectionListener {}
+        networkCallback?.let { callback ->
+            runCatching { app.getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(callback) }
+        }
+        networkCallback = null
         scope.cancel()
         places.stop()
         navi.disconnect()

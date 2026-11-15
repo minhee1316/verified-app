@@ -16,14 +16,14 @@ internal object PhoneRelay {
 
     // 자유 입력·위치·차량 식별자가 든 원문은 차에만 남긴다.
     fun message(n: SentNotice): String {
-        if (n.title == TEST_TITLE) return "확인됨 시험 알림이 도착했어요."
+        if (n.title == TEST_TITLE) return "현대 카가드 시험 알림이 도착했어요."
         val summary = when {
             n.level == Level.DANGER || n.level == Level.WARN -> "차량에서 확인할 사항이 있어요."
             "반납" in n.title || "인수 리포트" in n.title || "대리 주차 완료" in n.title -> "차를 돌려받은 기록이 준비됐어요."
             listOf("맡기기 시작", "빌려주기 시작", "대리운전 시작").any { it in n.title } -> "차를 맡긴 기록이 생겼어요."
             else -> "차량 알림이 있어요."
         }
-        return (if (n.phoneExample) "예시 차량 · " else "") + summary + " 자세한 내용은 확인됨 앱에서 확인하세요."
+        return (if (n.phoneExample) "예시 차량 · " else "") + summary + " 자세한 내용은 현대 카가드 앱에서 확인하세요."
     }
 
     data class Result(val status: PhoneDelivery, val retryAfterMs: Long = 0)
@@ -47,7 +47,7 @@ internal object PhoneRelay {
                 readTimeout = 8_000
                 doOutput = true
                 setRequestProperty("Content-Type", "text/plain; charset=utf-8")
-                setRequestProperty("X-Title", "VERIFIED")
+                setRequestProperty("X-Title", "Hyundai CarGuard")
                 setRequestProperty("X-Sequence-ID", sequence)
                 setFixedLengthStreamingMode(bytes.size)
                 outputStream.use { it.write(bytes) }

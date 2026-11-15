@@ -32,7 +32,7 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.time.Duration
 
-/** 제출용 빌드의 휴대폰 체험 모드: 예시 값은 체험 저장소에만 쌓이고, 끝내면 실제 모드로 돌아간다. */
+/** 제출용 앱은 등록 없이 시연으로 시작하고 예시 기록은 별도 저장소에만 쌓인다. */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [34], qualifiers = "w411dp-h891dp-port-mdpi")
@@ -59,10 +59,10 @@ class TrialModeTest {
     }
 
     @Test fun trialKeepsExampleRecordsApartAndEndsCleanly() {
+        Store(app).saveSettings(com.verified.incar.core.Settings(personas = setOf(Persona.NIGHT_OUT), carModel = CarModel.AVANTE))
         val real = runtime()
-        real.settings { it.copy(personas = setOf(Persona.NIGHT_OUT), carModel = CarModel.AVANTE) }
-        assertTrue(real.ui.value.trialAvailable)
-        assertFalse(real.ui.value.simAllowed)
+        assertTrue(real.ui.value.trial)
+        assertTrue(real.ui.value.simAllowed)
 
         assertTrue(real.startTrial(CarModel.TUCSON))
         assertTrue(TrialMode.isOn(app))
@@ -72,8 +72,8 @@ class TrialModeTest {
         assertTrue(trial.ui.value.simAllowed)
         assertFalse(trial.ui.value.trialAvailable)
         assertEquals(CarModel.TUCSON, trial.ui.value.settings.carModel)
-        // 생활 유형은 이어 가지만 실제 저장소의 차종은 그대로다
-        assertEquals(setOf(Persona.NIGHT_OUT), trial.ui.value.settings.personas)
+        // 시연은 전체 기능을 볼 수 있고 실제 저장소의 차종·생활 유형은 그대로다
+        assertEquals(Persona.entries.toSet(), trial.ui.value.settings.personas)
         assertEquals(CarModel.AVANTE, Store(app).loadSettings().carModel)
 
         trial.act { s, now -> startLend(s, now, com.verified.incar.core.HandKind.SERVICE) }
@@ -85,27 +85,30 @@ class TrialModeTest {
         assertFalse(TrialMode.isOn(app))
         assertNull(Store(app, ns = Store.TRIAL_NS).loadSettings().carModel)
         val back = runtime()
-        assertFalse(back.ui.value.trial)
-        assertFalse(back.ui.value.simAllowed)
+        assertTrue(back.ui.value.trial)
+        assertTrue(back.ui.value.simAllowed)
+        assertEquals(CarModel.GRANDEUR, back.ui.value.settings.carModel)
         assertTrue(back.ui.value.engine.history.isEmpty())
+        assertEquals(CarModel.AVANTE, Store(app).loadSettings().carModel)
+        real.close(); trial.close(); back.close()
     }
 
-    @Test fun releaseHomeOffersTrialAndHidesExampleShop() {
+    @Test fun releaseHomeStartsDemoAndAllowsChangingExampleCar() {
         val vm = runtime()
         vm.settings { it.copy(personas = Persona.entries.toSet()) }
         rule.setContent { MaterialTheme { App(vm) } }
         rule.waitForIdle()
-        rule.onNodeWithTag("trial_entry").assertExists()
+        rule.onNodeWithTag("home_hero").assertExists()
+        rule.onNodeWithTag("trial_panel").assertExists()
         rule.onNodeWithTag("nav_SHOP").assertDoesNotExist()
-        rule.onAllNodesWithText("차종 고르고 체험 시작").onFirst().performScrollTo().performClick()
+        vm.navigate.value = "TRIAL"
         rule.waitForIdle()
         rule.onNodeWithTag("trial_model_TUCSON").performClick()
         rule.waitForIdle()
         shot("60_폰_체험_차종선택")
-        rule.onNodeWithTag("trial_start").performScrollTo().performClick()
-        rule.waitForIdle()
-        assertTrue(TrialMode.isOn(app))
+        assertTrue(vm.ui.value.trial)
         assertEquals(CarModel.TUCSON, Store(app, ns = Store.TRIAL_NS).loadSettings().carModel)
+        vm.close()
     }
 
     @Test fun trialHomePlaysServiceScenario() {

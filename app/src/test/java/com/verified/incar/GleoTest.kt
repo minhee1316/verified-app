@@ -47,6 +47,17 @@ class GleoTest {
         assertEquals(EscortPhase.BOARDING, r.ui.value.engine.escort.phase)
     }
 
+    /** 엔진이 대리 시작을 거절하면(맡김 진행 중) 음성 비서에게도 실패로 답한다. */
+    @Test fun voice_reportsRefusalWhenHandoverIsActive() {
+        val r = rt()
+        r.act { s, now -> startLend(s, now) }
+        val v = Gleo.handle(r, Gleo.START_VALET, null)
+        assertEquals("fail", v.status)
+        assertEquals(ValetPhase.IDLE, r.ui.value.engine.valet.phase)
+        assertTrue(r.ui.value.engine.lend.active)
+        r.close()
+    }
+
     @Test fun voice_refusesWhileDriving() {
         val r = rt()
         r.sim { it.copy(gear = Gear.D, speedKmh = 40f) }

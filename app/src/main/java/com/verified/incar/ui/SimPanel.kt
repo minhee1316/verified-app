@@ -39,6 +39,9 @@ fun SimPanel(vm: VerifiedRuntime, u: UiState) {
 
         Head("시나리오 자동 재생")
         Wrap {
+            Chip("미리보기: 전기차 경로", false) { vm.navigate.value = "EV_ROUTE" }
+            Chip("미리보기: 발레 감시", false) { vm.navigate.value = "VALET_WATCH" }
+            Chip("미리보기: 무선 진단", false) { vm.navigate.value = "RADIO_DIAG" }
             Chip("① 대리 완료", false) { vm.runScenario("valet") }
             Chip("① 시동 바로 OFF", false) { vm.runScenario("valet_quick_off") }
             Chip("① 지하주차장", false) { vm.runScenario("valet_garage") }

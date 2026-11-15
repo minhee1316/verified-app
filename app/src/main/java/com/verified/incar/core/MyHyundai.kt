@@ -328,7 +328,7 @@ object MyHyundai {
     fun historyCsv(history: List<HandoverRecord>): String = buildString {
         fun row(vararg v: String) = append(v.joinToString(",") { "\"" + VerdictEngine.csvSafe(it).replace("\"", "\"\"") + "\"" }).append('\n')
         fun at(ms: Long) = "${VerdictEngine.date(ms)} ${VerdictEngine.hhmm(ms)}"
-        append('﻿') // 엑셀 한글 깨짐 방지 BOM
+        append('\uFEFF') // 엑셀 한글 깨짐 방지 BOM
         row("종류", "맡긴 시각", "돌려받은 시각", "남이 운전한 거리(km)", "최고 속도(km/h)", "급감속(회)", "바뀐 것", "문제 없이 돌려받음")
         history.map { it.respectingValetConsent() }.sortedBy { it.startMs }.forEach {
             row(it.kind, at(it.startMs), at(it.endMs), it.km?.let { k -> "%.1f".format(java.util.Locale.ROOT, k) } ?: "확인 불가",
@@ -340,21 +340,21 @@ object MyHyundai {
     }
 
     val POIS = listOf(
-        Poi("충전소", "현대 E-pit (목업)", 2.4, "초고속 350kW", Charger("DC콤보", indoor = false, working = true, open = true, spot = "지상 입구 옆")),
-        Poi("충전소", "공영주차장 완속 충전기 (목업)", 0.8, "완속 7kW", Charger("AC완속", indoor = false, working = true, open = true, spot = "1구역")),
-        Poi("충전소", "마트 지하 급속 충전기 (목업)", 1.6, "급속 100kW", Charger("DC콤보", indoor = true, working = true, open = true, spot = "지하 2층 C-14 기둥")),
-        Poi("충전소", "아파트 충전기 (목업)", 0.4, "급속 50kW · 입주민 전용", Charger("DC콤보", indoor = true, working = true, open = false, spot = "지하 1층")),
-        Poi("충전소", "휴게소 급속 충전기 (목업)", 6.2, "급속 100kW · 점검 중", Charger("DC콤보", indoor = false, working = false, open = true, spot = "주유소 뒤편")),
-        Poi("맛집", "근처 한식당 (목업)", 1.1, "주차 가능"),
-        Poi("주차장", "공영주차장 (목업)", 0.5, "30분 무료"),
-        Poi("세차장", "자동 세차장 (목업)", 1.9, "N단 유지 필요"),
-        Poi("블루핸즈", "블루핸즈 (목업)", 3.2, "정비·소모품"),
+        Poi("충전소", "현대 E-pit", 2.4, "초고속 350kW", Charger("DC콤보", indoor = false, working = true, open = true, spot = "지상 입구 옆")),
+        Poi("충전소", "공영주차장 완속 충전기", 0.8, "완속 7kW", Charger("AC완속", indoor = false, working = true, open = true, spot = "1구역")),
+        Poi("충전소", "마트 지하 급속 충전기", 1.6, "급속 100kW", Charger("DC콤보", indoor = true, working = true, open = true, spot = "지하 2층 C-14 기둥")),
+        Poi("충전소", "아파트 충전기", 0.4, "급속 50kW · 입주민 전용", Charger("DC콤보", indoor = true, working = true, open = false, spot = "지하 1층")),
+        Poi("충전소", "휴게소 급속 충전기", 6.2, "급속 100kW · 점검 중", Charger("DC콤보", indoor = false, working = false, open = true, spot = "주유소 뒤편")),
+        Poi("맛집", "근처 한식당", 1.1, "주차 가능"),
+        Poi("주차장", "공영주차장", 0.5, "30분 무료"),
+        Poi("세차장", "자동 세차장", 1.9, "N단 유지 필요"),
+        Poi("블루핸즈", "블루핸즈", 3.2, "정비·소모품"),
     )
 
     val SHOP = listOf(
-        ShopItem("현대샵", "순정 와이퍼 블레이드 세트 (목업)", 32_000, "와이퍼 교체 주기 도래 시 추천"),
-        ShopItem("현대샵", "실내 에어컨 필터 (목업)", 18_000, "15,000km 주기"),
-        ShopItem("현대샵", "트렁크 정리함 (목업)", 45_000, "⑦ 트렁크 짐 확인과 함께"),
-        ShopItem("블루링크 스토어", "디지털 사양 추가 (목업)", 0, "가격·제공 사양은 차종별 상이"),
+        ShopItem("현대샵", "순정 와이퍼 블레이드 세트", 32_000, "와이퍼 교체 주기 도래 시 추천"),
+        ShopItem("현대샵", "실내 에어컨 필터", 18_000, "15,000km 주기"),
+        ShopItem("현대샵", "트렁크 정리함", 45_000, "⑦ 트렁크 짐 확인과 함께"),
+        ShopItem("블루링크 스토어", "디지털 사양 추가", 0, "가격·제공 사양은 차종별 상이"),
     )
 }

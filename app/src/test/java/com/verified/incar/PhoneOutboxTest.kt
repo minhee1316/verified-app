@@ -21,12 +21,14 @@ class PhoneOutboxTest {
     private val app: Application get() = RuntimeEnvironment.getApplication()
     private val sent = CopyOnWriteArrayList<String>()
 
-    private fun runtime(status: PhoneDelivery = PhoneDelivery.ACCEPTED): VerifiedRuntime {
+    private fun runtime(status: PhoneDelivery = PhoneDelivery.ACCEPTED, connected: Boolean = false): VerifiedRuntime {
         shadowOf(app.getSystemService(ConnectivityManager::class.java)).setDefaultNetworkActive(true)
-        return VerifiedRuntime(app, false) { _, n ->
+        val send: (String, SentNotice) -> PhoneRelay.Result = { _, n ->
             sent.add(checkNotNull(n.phoneId))
             PhoneRelay.Result(status, retryAfterMs = 60_000)
         }
+        return if (connected) VerifiedRuntime(app, false, send) { _, _ -> ConnectedWithoutReadings() }
+        else VerifiedRuntime(app, false, send)
     }
 
     private fun waitFor(condition: () -> Boolean) {
@@ -38,9 +40,9 @@ class PhoneOutboxTest {
         assertTrue(condition())
     }
 
-    @Test fun releaseHandsetRecordsManualHandoverWithoutSampleMeasurements() {
+    @Test fun connectedReleaseRecordsManualHandoverWithoutInventingMissingMeasurements() {
         app.applicationInfo.flags = app.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE.inv()
-        val runtime = runtime()
+        val runtime = runtime(connected = true)
         assertFalse(runtime.ui.value.simAllowed)
         runtime.act { _, _ -> startValet() }
         assertFalse(runtime.ui.value.engine.valet.active)

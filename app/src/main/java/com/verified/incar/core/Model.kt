@@ -2,7 +2,7 @@ package com.verified.incar.core
 
 enum class Gear { P, R, N, D }
 
-enum class Place(val label: String) { HOME("집"), MART("마트"), HOSPITAL("병원"), SCHOOL("학교"), OTHER("그 밖의 곳") }
+enum class Place(val label: String) { HOME("집"), MART("마트"), HOSPITAL("병원"), SCHOOL("학교"), OTHER("기타 장소") }
 
 enum class Wiper { OFF, AUTO, LOW }
 
@@ -240,6 +240,10 @@ data class Settings(
     val startHaptic: Boolean = true,
     /** 홈·제어 빠른 제어 순서(길게 눌러 바꿈). 모르는 값은 버리고 빠진 값은 뒤에 붙인다. */
     val quickOrder: List<String> = QUICK_DEFAULT,
+    val homeFavorites: List<String> = emptyList(),
+    /** 주차 위치 직접 메모("B2 C구역 32번, 엘리베이터 옆")와 적은 시각. 지하에서 GPS가 없어도 찾아갈 단서. 사진은 앱 폴더에 따로. */
+    val parkingNote: String = "",
+    val parkingNoteAtMs: Long = 0,
     /** 블루멤버스 보유 포인트(연동 목업). ⑤ 스쿨존 적립분은 따로 더한다. */
     val memberPoints: Int = 0,
     /** 차주 PIN의 PBKDF2 해시와 소금. PIN 자체는 저장하지 않는다. */
